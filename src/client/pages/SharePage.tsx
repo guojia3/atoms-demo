@@ -103,7 +103,7 @@ export default function SharePage({ user }: Props) {
           <div className="grid flex-1 place-items-center text-[13px] text-neutral-400">正在加载应用…</div>
         ) : (
           <>
-            <div className="flex-1 overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_18px_50px_-30px_rgba(24,24,27,0.35)]">
+            <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_18px_50px_-30px_rgba(24,24,27,0.35)]">
               <div className="flex items-center gap-2 border-b border-neutral-100 bg-neutral-50/80 px-4 py-2">
                 <span className="flex gap-1.5">
                   <i className="h-2.5 w-2.5 rounded-full bg-red-400/70" />
@@ -114,14 +114,14 @@ export default function SharePage({ user }: Props) {
                   {sourceLabel(data)} · 数据自动保存
                 </span>
               </div>
-              <div className="h-[calc(100vh-220px)] min-h-[420px]">
-                <Sandbox
-                  html={data.html}
-                  initData={kv}
-                  scope={{ kind: 'share', slug }}
-                  onConsole={() => {}}
-                />
-              </div>
+              {/* 分享页按内容自适应高度：窄屏下棋盘等长内容不被固定容器裁切 */}
+              <Sandbox
+                html={data.html}
+                initData={kv}
+                scope={{ kind: 'share', slug }}
+                onConsole={() => {}}
+                autoHeight
+              />
             </div>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-neutral-400">
               <span>你的操作会自动保存（按访客独立存储），作者更新版本后会切换到最新发布版。</span>

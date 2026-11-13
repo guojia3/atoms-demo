@@ -45,7 +45,22 @@ ${BASE_CSS}
   .oacts .btn{background:#8f7a66}
   .oacts .ghost{background:#cdc1b4}
   .tip{margin-top:14px;font-size:12px;color:#8f8578;line-height:1.6}
-  @media (max-width:420px){body{padding:14px}h1{font-size:26px}.cell{font-size:18px}.t128,.t256,.t512{font-size:16px}.t1024,.t2048{font-size:13px}}
+  @media (max-width:420px){
+    body{padding:10px}
+    h1{font-size:24px}
+    .sub{display:none}
+    .btn{padding:8px 10px;font-size:12px}
+    .hud{gap:6px;margin:8px 0}
+    .box{padding:5px 10px;min-width:64px}
+    .box span{font-size:9px}
+    .box strong{font-size:16px}
+    .board{max-width:min(100%,360px);margin:0 auto;gap:6px;padding:6px;border-radius:12px}
+    .cell{font-size:18px;border-radius:7px}
+    .t128,.t256,.t512{font-size:16px}
+    .t1024,.t2048{font-size:13px}
+    .overlay{border-radius:12px}
+    .tip{display:none}
+  }
 </style>
 </head>
 <body>

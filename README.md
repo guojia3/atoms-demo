@@ -41,6 +41,13 @@ MOCK_MODE=1 PORT=3300 DATABASE_PATH=/tmp/atoms-tpl-check.db npm start   # 或 np
 QA_BASE=http://127.0.0.1:3300 node test/templates-check.mjs              # ONLY=kanban 可只跑单个
 ```
 
+手机复测 BUG 回归（2048 分享页 375/390 布局、工作台/分享页 0 原生对话框、探针时效与评分）：
+
+```bash
+MOCK_MODE=1 PORT=3400 DATABASE_PATH=/tmp/atoms-mobile-bugs.db NODE_ENV=production npm start
+QA_BASE=http://127.0.0.1:3400 node test/mobile-bugs-check.mjs            # 截图输出 test/results/bug2048-*.png
+```
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |

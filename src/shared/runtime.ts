@@ -74,6 +74,63 @@ export const SANDBOX_RUNTIME = String.raw`
   } catch (e) { /* noop */ }
   try { window.__atomsStorage = localShim; } catch (e) { /* noop */ }
 
+  // 对话框替身：必须在页面脚本之前接管，避免原生 alert/confirm/prompt 阻塞父页面与验收探针
+  var probing = false;
+  var pendingConfirm = null;
+
+  function toastHost() {
+    var host = document.getElementById('__atoms_toast_host__');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = '__atoms_toast_host__';
+      host.setAttribute('role', 'status');
+      host.style.cssText = 'position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:2147483647;display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none;width:max-content;max-width:92vw';
+      (document.body || document.documentElement).appendChild(host);
+    }
+    return host;
+  }
+  function showToast(text, warn) {
+    try {
+      var host = toastHost();
+      var item = document.createElement('div');
+      item.textContent = String(text == null ? '' : text).slice(0, 240);
+      item.style.cssText = 'box-sizing:border-box;max-width:92vw;padding:8px 12px;border-radius:10px;font:13px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#fff;background:' + (warn ? '#b45309' : '#18181b') + ';box-shadow:0 8px 24px rgba(0,0,0,.24);opacity:0;transform:translateY(6px);transition:opacity .16s,transform .16s';
+      host.appendChild(item);
+      setTimeout(function () {
+        item.style.opacity = '1';
+        item.style.transform = 'translateY(0)';
+      }, 0);
+      setTimeout(function () {
+        item.style.opacity = '0';
+        setTimeout(function () {
+          if (item.parentNode) item.parentNode.removeChild(item);
+        }, 200);
+      }, 3000);
+    } catch (e) { /* noop */ }
+  }
+
+  window.alert = function (message) {
+    if (probing) return;
+    showToast(message);
+  };
+  window.confirm = function (message) {
+    // 探针模式一律拒绝，保证批量点击不触发破坏性操作
+    if (probing) return false;
+    var text = String(message == null ? '' : message);
+    var now = Date.now();
+    if (pendingConfirm && now - pendingConfirm.at <= 3000 && pendingConfirm.text === text) {
+      pendingConfirm = null;
+      return true;
+    }
+    pendingConfirm = { text: text, at: now };
+    showToast(text + '（3 秒内再次点击即可确认）', true);
+    return false;
+  };
+  window.prompt = function (message) {
+    if (!probing) showToast('此应用不支持系统输入框，请直接在页面内输入' + (message ? ('：' + String(message)) : ''));
+    return null;
+  };
+
   var errors = [];
   function recordError(message, source) {
     var text = String(message == null ? 'unknown error' : message).slice(0, 300);
@@ -103,6 +160,7 @@ export const SANDBOX_RUNTIME = String.raw`
     new MutationObserver(function (records) {
       mutationCount += records.length;
       lastMutationAt = Date.now();
+      scheduleHeight();
     }).observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
   } catch (e) { /* noop */ }
 
@@ -112,6 +170,29 @@ export const SANDBOX_RUNTIME = String.raw`
   document.addEventListener('click', onUserAction, true);
   document.addEventListener('input', onUserAction, true);
   document.addEventListener('change', onUserAction, true);
+
+  // 内容高度上报：分享页据此让 iframe 自适应，父容器不裁切
+  var heightTimer = null;
+  var lastHeight = 0;
+  function reportHeight() {
+    heightTimer = null;
+    try {
+      var body = document.body;
+      var de = document.documentElement;
+      var bodyHeight = body ? Math.max(body.getBoundingClientRect().height, body.scrollHeight) : 0;
+      var docHeight = de ? de.scrollHeight : 0;
+      var height = Math.ceil(Math.max(bodyHeight, docHeight));
+      if (height > 0 && Math.abs(height - lastHeight) > 1) {
+        lastHeight = height;
+        post('atoms-height', { height: height, width: window.innerWidth });
+      }
+    } catch (e) { /* noop */ }
+  }
+  function scheduleHeight() {
+    if (heightTimer) return;
+    heightTimer = setTimeout(reportHeight, 120);
+  }
+  window.addEventListener('resize', scheduleHeight);
 
   var pickMode = false;
   function selectorFor(el) {
@@ -173,6 +254,7 @@ export const SANDBOX_RUNTIME = String.raw`
   }
 
   function runProbe(id) {
+    probing = true;
     var beforeMut = mutationCount;
     var beforeWrites = totalWrites;
     // 首/中/尾各取 3 个，覆盖数字键、功能键与提交键，避免只点前几个漏掉关键交互
@@ -198,13 +280,18 @@ export const SANDBOX_RUNTIME = String.raw`
       try { el.click(); simulated++; } catch (e) { /* noop */ }
     });
     setTimeout(function () {
+      // 先恢复手动模式，避免采集异常把 probing 状态永久留在探针模式
+      probing = false;
       var metrics = collectMetrics();
       metrics.simulatedClicks = simulated;
       metrics.simulatedChanges = mutationCount - beforeMut;
       metrics.simulatedWrites = totalWrites - beforeWrites;
       metrics.probedAt = Date.now();
       post('atoms-probe-result', { id: id, metrics: metrics });
+      scheduleHeight();
     }, 500);
+    // 兜底：页面脚本卡死时最多 8 秒后退出探针模式
+    setTimeout(function () { probing = false; }, 8000);
   }
 
   window.addEventListener('message', function (event) {
@@ -226,7 +313,11 @@ export const SANDBOX_RUNTIME = String.raw`
 
   post('atoms-ready', { title: document.title || '' });
   window.addEventListener('load', function () {
-    setTimeout(function () { post('atoms-rendered', collectMetrics()); }, 60);
+    setTimeout(function () {
+      post('atoms-rendered', collectMetrics());
+      reportHeight();
+    }, 60);
   });
+  scheduleHeight();
 })();
 `

@@ -23,6 +23,8 @@ interface Props {
   scope: { kind: 'project'; projectId: string } | { kind: 'share'; slug: string }
   onConsole?: (level: 'info' | 'error' | 'warn', text: string) => void
   onPick?: (picked: { selector: string; tag: string; text: string; html?: string }) => void
+  /** 内容自适应高度：运行时上报 scrollHeight 后撑开 iframe（仅分享页使用，工作台预览保持 h-full） */
+  autoHeight?: boolean
 }
 
 const CSP = [
@@ -53,7 +55,7 @@ function buildSrcDoc(html: string, initData: Record<string, string>, runtime: st
 }
 
 const Sandbox = forwardRef<SandboxHandle, Props>(function Sandbox(
-  { html, initData, scope, onConsole, onPick },
+  { html, initData, scope, onConsole, onPick, autoHeight = false },
   ref,
 ) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -74,9 +76,14 @@ const Sandbox = forwardRef<SandboxHandle, Props>(function Sandbox(
   const htmlRef = useRef(html)
   htmlRef.current = html
   const [reloadDoc, setReloadDoc] = useState<string | null>(null)
+  const autoHeightRef = useRef(autoHeight)
+  autoHeightRef.current = autoHeight
+  // 自适应高度：初始给一个可测量的高度，运行时上报后按内容撑开
+  const [frameHeight, setFrameHeight] = useState(480)
 
   useEffect(() => {
     setReloadDoc(null)
+    setFrameHeight(480)
   }, [html])
 
   const srcDoc = useMemo(
@@ -91,6 +98,13 @@ const Sandbox = forwardRef<SandboxHandle, Props>(function Sandbox(
       const data = event.data
       if (!data || typeof data !== 'object') return
 
+      if (data.type === 'atoms-height') {
+        if (!autoHeightRef.current) return
+        const height = Math.round(Number(data.height))
+        if (!Number.isFinite(height) || height <= 0) return
+        setFrameHeight((prev) => (Math.abs(prev - height) <= 1 ? prev : height))
+        return
+      }
       if (data.type === 'atoms-kv' && Array.isArray(data.ops)) {
         const currentScope = scopeRef.current
         const path =
@@ -171,8 +185,9 @@ const Sandbox = forwardRef<SandboxHandle, Props>(function Sandbox(
       ref={iframeRef}
       title="应用预览"
       srcDoc={srcDoc}
-      sandbox="allow-scripts allow-forms allow-modals allow-downloads"
-      className="h-full w-full border-0 bg-white"
+      sandbox="allow-scripts allow-forms allow-downloads"
+      className={`w-full border-0 bg-white ${autoHeight ? 'block' : 'h-full'}`}
+      style={autoHeight ? { height: `${frameHeight}px` } : undefined}
       onLoad={() => consoleRef.current?.('info', '预览已加载')}
     />
   )
