@@ -23,6 +23,7 @@ import {
 import { executeRun } from '../jobs/runner.js'
 import { isMockMode, config } from '../config.js'
 import { takeGenerationQuota } from '../auth.js'
+import { pickTemplate } from '../mock/templates.js'
 
 const router = Router()
 
@@ -131,12 +132,13 @@ router.post('/projects', (req, res) => {
 
 router.get('/samples', (_req, res) => {
   res.json({
-    samples: listSamples(6).map((p) => ({
+    samples: listSamples(8).map((p) => ({
       id: p.id,
       title: p.title,
       prompt: p.prompt,
       slug: p.share_slug,
       score: p.current_score,
+      kind: pickTemplate(p.prompt),
     })),
   })
 })

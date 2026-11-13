@@ -21,7 +21,9 @@ npm run build
 npm start                 # 默认 http://localhost:3000
 ```
 
-无模型 Key 时：`MOCK_MODE=1` 或未配置供应商，自动使用内置模板（任务看板 / 计算器 / 习惯打卡），整条链路依然可用。
+无模型 Key 时：`MOCK_MODE=1` 或未配置供应商，自动使用内置模板（任务看板 / 习惯打卡 / 2048 / 番茄专注 / Markdown 笔记 / 记账本，按提示词自动路由），整条链路依然可用。
+
+首页「推荐成品」来自种子账号 `seed-owner` 的 6 个已发布项目（一个品类一个入口），启动时自动补齐并幂等更新；已下线的种子成品在服务启动时从库中删除。
 
 ### 端到端冒烟
 
@@ -31,6 +33,13 @@ SMOKE_BASE_URL=http://localhost:3000 npm run smoke
 ```
 
 覆盖：游客创建 → 双路候选 → 赛马择优 → 版本 v1 → 发布 `/s/:slug` → 访客 KV 持久化与隔离 → 编辑 v2 → 一键修复 v3。
+
+内置成品回归（无头 Chrome + CDP，真实操作 6 个发布页并检查 375px、console、刷新持久化）：
+
+```bash
+MOCK_MODE=1 PORT=3300 DATABASE_PATH=/tmp/atoms-tpl-check.db npm start   # 或 npx tsx src/server/index.ts
+QA_BASE=http://127.0.0.1:3300 node test/templates-check.mjs              # ONLY=kanban 可只跑单个
+```
 
 ## 环境变量
 
@@ -112,7 +121,7 @@ docker compose up -d --build
 src/server/         Express + SQLite：认证、项目/版本、运行编排、SSE、分享、KV
 src/server/agents/  planner / engineer / reviewer 三个智能体
 src/server/verify/  静态检查与实测评分
-src/server/mock/    无模型时的三套内置交互模板
+src/server/mock/    无模型时的六套内置交互模板（src/server/mock/kinds/）
 src/client/         React 19 + Vite 6 + Tailwind v4：首页、工作区、分享页
 src/shared/         沙箱 runtime（存储替身 / 错误采集 / 探针 / 点选）
 script/smoke.ts     端到端冒烟

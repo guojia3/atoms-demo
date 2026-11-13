@@ -168,13 +168,17 @@ export function findProjectBySlug(slug: string): ProjectRow | undefined {
   return getOne<ProjectRow>('SELECT * FROM projects WHERE share_slug = ?', slug)
 }
 
-/** 首页示例：取已发布的公开项目 */
-export function listSamples(limit = 6): Array<ProjectRow & { current_score: number | null }> {
+/** 首页示例的固定归属账号：只展示种子成品，避免测试或用户项目混入 */
+export const SAMPLE_OWNER_ID = 'seed-owner'
+
+/** 首页示例：只取种子账号下已发布的公开项目，保证一个品类一个入口 */
+export function listSamples(limit = 8): Array<ProjectRow & { current_score: number | null }> {
   return getAll<ProjectRow & { current_score: number | null }>(
     `SELECT p.*, (SELECT score FROM versions v WHERE v.id = p.current_version_id) AS current_score
      FROM projects p
-     WHERE p.published_version_id IS NOT NULL AND p.share_slug IS NOT NULL
+     WHERE p.user_id = ? AND p.published_version_id IS NOT NULL AND p.share_slug IS NOT NULL
      ORDER BY p.created_at ASC LIMIT ?`,
+    SAMPLE_OWNER_ID,
     limit,
   )
 }

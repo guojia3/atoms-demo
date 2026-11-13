@@ -4,10 +4,25 @@ import { api, timeAgo } from '../api'
 import type { ProjectSummary, SampleSummary, ServerConfig, User } from '../types'
 
 const EXAMPLES = [
-  '做一个任务看板，支持添加任务、推进状态，刷新后数据还在',
-  '做一个计算器，支持四则运算、百分比和历史记录',
+  '做一个 2048 游戏，方向键和手机滑动都能玩，最高分保存',
+  '做一个番茄钟，25 分钟专注 + 5 分钟休息，完成次数按天保存',
+  '做一个 Markdown 笔记应用，支持新建、搜索与实时预览',
+  '做一个记账本，记录金额和分类，自动汇总合计',
   '做一个习惯打卡应用，可以按天打卡并显示连续天数',
-  '做一个周末读书计划看板，能标记完成进度',
+]
+
+const COVERS: Record<string, { label: string; className: string }> = {
+  kanban: { label: '效率', className: 'bg-gradient-to-br from-indigo-500 to-violet-500' },
+  habit: { label: '习惯', className: 'bg-gradient-to-br from-emerald-500 to-teal-500' },
+  game2048: { label: '游戏', className: 'bg-gradient-to-br from-amber-400 to-orange-500' },
+  pomodoro: { label: '专注', className: 'bg-gradient-to-br from-rose-500 to-orange-500' },
+  notes: { label: '笔记', className: 'bg-gradient-to-br from-sky-500 to-indigo-500' },
+  expense: { label: '记账', className: 'bg-gradient-to-br from-fuchsia-500 to-pink-500' },
+}
+const FALLBACK_COVERS = [
+  'bg-gradient-to-br from-indigo-500 to-violet-500',
+  'bg-gradient-to-br from-emerald-500 to-teal-500',
+  'bg-gradient-to-br from-amber-400 to-orange-500',
 ]
 
 interface Props {
@@ -131,28 +146,32 @@ export default function Home({ user, config }: Props) {
             </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {samples.map((s, i) => (
-              <Link
-                key={s.id}
-                to={`/s/${s.slug}`}
-                className="group overflow-hidden rounded-2xl border border-neutral-200 bg-white transition hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-lg"
-              >
-                <div
-                  className={`h-24 ${['bg-gradient-to-br from-indigo-500 to-violet-500', 'bg-gradient-to-br from-emerald-500 to-teal-500', 'bg-gradient-to-br from-amber-400 to-orange-500'][i % 3]} relative`}
+            {samples.map((s, i) => {
+              const cover = COVERS[s.kind || '']
+              return (
+                <Link
+                  key={s.id}
+                  to={`/s/${s.slug}`}
+                  className="group overflow-hidden rounded-2xl border border-neutral-200 bg-white transition hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-lg"
                 >
-                  <span className="absolute bottom-3 left-4 rounded-full bg-white/20 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
-                    {s.score ? `${s.score} 分` : '已发布'}
-                  </span>
-                </div>
-                <div className="p-4">
-                  <h3 className="text-[15px] font-semibold text-neutral-900 group-hover:text-indigo-700">{s.title}</h3>
-                  <p className="mt-1 line-clamp-2 text-[12px] leading-5 text-neutral-500">{s.prompt}</p>
-                  <span className="mt-3 inline-flex items-center gap-1 text-[12px] font-medium text-indigo-600">
-                    打开应用 <span className="transition group-hover:translate-x-0.5">→</span>
-                  </span>
-                </div>
-              </Link>
-            ))}
+                  <div className={`relative h-24 ${cover ? cover.className : FALLBACK_COVERS[i % FALLBACK_COVERS.length]}`}>
+                    <span className="absolute left-4 top-3.5 rounded-full bg-white/20 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
+                      {cover?.label || '应用'}
+                    </span>
+                    <span className="absolute bottom-3 left-4 rounded-full bg-white/20 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
+                      {s.score ? `${s.score} 分` : '已发布'}
+                    </span>
+                  </div>
+                  <div className="p-4">
+                    <h3 className="text-[15px] font-semibold text-neutral-900 group-hover:text-indigo-700">{s.title}</h3>
+                    <p className="mt-1 line-clamp-2 text-[12px] leading-5 text-neutral-500">{s.prompt}</p>
+                    <span className="mt-3 inline-flex items-center gap-1 text-[12px] font-medium text-indigo-600">
+                      打开应用 <span className="transition group-hover:translate-x-0.5">→</span>
+                    </span>
+                  </div>
+                </Link>
+              )
+            })}
           </div>
         </section>
       )}

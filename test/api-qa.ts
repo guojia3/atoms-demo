@@ -1115,19 +1115,22 @@ async function main(): Promise<void> {
   await runCase(
     {
       id: 'API33',
-      title: '首页样例包含服务端种子，且全部为已发布项目',
+      title: '首页样例仅包含种子成品，一个品类一个入口',
       priority: 'P1',
       req: 'H2/A1',
-      expected: 'samples ≥3，含 k7m2x9，均有 slug；未发布项目不在列表',
+      expected: 'samples 恰为 6 个，含 k7m2x9，不含 calculator，均有 slug 与 kind，slug 不重复',
     },
     async () => {
       const r = await http(new Jar(), 'GET', '/api/samples')
       eq(r.status, 200, 'HTTP 状态')
       const samples = r.json.samples || []
-      ok(samples.length >= 3, `样例数量不足：${samples.length}`)
+      eq(samples.length, 6, '样例数量应为 6')
       ok(samples.some((s: any) => s.slug === 'k7m2x9'), '缺少种子 k7m2x9')
-      ok(samples.every((s: any) => s.slug && s.title), '样例字段缺失')
-      return `${samples.length} 个样例，含种子 k7m2x9`
+      ok(!samples.some((s: any) => s.kind === 'calculator'), '计算器应从成品库移除')
+      ok(samples.every((s: any) => s.slug && s.title && s.kind), '样例字段缺失')
+      const slugs = new Set(samples.map((s: any) => s.slug))
+      eq(slugs.size, samples.length, '样例 slug 重复')
+      return `${samples.length} 个样例，slug 唯一，无 calculator`
     },
   )
 

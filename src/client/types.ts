@@ -76,6 +76,7 @@ export interface SampleSummary {
   prompt: string
   slug: string
   score: number | null
+  kind?: string
 }
 
 export interface ReportItem {

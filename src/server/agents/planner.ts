@@ -1,7 +1,7 @@
 // 规划师 Mike：把一句话需求拆成目标、页面、功能与可验收清单
 import { isMockMode } from '../config.js'
 import { streamChat } from '../llm/client.js'
-import { escapeHtml, pickTemplate } from '../mock/templates.js'
+import { escapeHtml, pickTemplate, TEMPLATE_LABELS } from '../mock/templates.js'
 
 export interface ChecklistItem {
   id: string
@@ -31,9 +31,8 @@ function cleanTitle(prompt: string): string {
 
 export function mockPlan(prompt: string, mode: 'create' | 'edit' = 'create'): Plan {
   const kind = pickTemplate(prompt)
-  const names: Record<string, string> = { kanban: '任务看板', calculator: '计算器', habit: '习惯打卡' }
   return {
-    title: mode === 'edit' ? cleanTitle(prompt) : names[kind] || cleanTitle(prompt),
+    title: mode === 'edit' ? cleanTitle(prompt) : TEMPLATE_LABELS[kind] || cleanTitle(prompt),
     summary:
       mode === 'edit'
         ? '在保持现有功能与数据结构的前提下，按你的要求做一次增量调整。'

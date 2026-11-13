@@ -172,13 +172,31 @@ async function main(): Promise<void> {
     assert(empty.includes('等待生成'), '空态提示')
   })
 
-  test('U13', '模板路由：计算器/打卡/默认看板 + 模板均通过静态检查', () => {
-    eq(pickTemplate('一个房贷月供计算器'), 'calculator', '计算器')
+  test('U13', '模板路由：6 种品类优先级正确，模板均通过静态检查', () => {
     eq(pickTemplate('习惯打卡，连续天数'), 'habit', '打卡')
     eq(pickTemplate('项目看板，支持拖拽'), 'kanban', '看板')
-    for (const kind of ['kanban', 'calculator', 'habit'] as const) {
+    eq(pickTemplate('2048 数字合并游戏'), 'game2048', '2048')
+    eq(pickTemplate('做一个番茄钟专注计时'), 'pomodoro', '番茄钟')
+    eq(pickTemplate('记账本，记录支出'), 'expense', '记账')
+    eq(pickTemplate('Markdown 笔记'), 'notes', '笔记')
+    eq(pickTemplate('周末读书计划清单'), 'kanban', '清单不应误判为打卡')
+    for (const kind of ['kanban', 'habit', 'game2048', 'pomodoro', 'notes', 'expense'] as const) {
       const html = mockHtml(kind, 'QA 模板')
       eq(staticCheck(html).score, 10, `${kind} 静态分`)
+    }
+  })
+
+  test('U17', '模板关键能力：交互入口、键盘/滑动、数据持久化键齐全', () => {
+    const markers: Record<string, string[]> = {
+      kanban: ['atoms_kanban_v2', '添加任务', '删除'],
+      habit: ['atoms_habit_v1', '连续', '添加习惯'],
+      game2048: ['atoms_2048_best_v1', 'touchstart', 'ArrowLeft', '重新开始'],
+      pomodoro: ['atoms_pomodoro_v1', '开始专注', '跳过'],
+      notes: ['atoms_notes_v1', '预览', 'confirm'],
+      expense: ['atoms_expense_v1', '分类', '请输入大于 0 的金额'],
+    }
+    for (const [kind, parts] of Object.entries(markers)) {
+      includesAll(mockHtml(kind as Parameters<typeof mockHtml>[0], 'QA'), parts)
     }
   })
 
@@ -189,9 +207,9 @@ async function main(): Promise<void> {
   })
 
   test('U15', 'mockPlan：固定 6 条验收清单，标题可识别品类', () => {
-    const plan = mockPlan('做一个计算器')
+    const plan = mockPlan('做一个记账本')
     eq(plan.checklist.length, 6, '清单条数')
-    eq(plan.title, '计算器', '标题')
+    eq(plan.title, '记账本', '标题')
     eq(plan.source, 'mock', '来源')
   })
 

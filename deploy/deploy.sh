@@ -36,9 +36,22 @@ if [ -n "$SSH_KEY" ]; then
   SCP_OPTS+=(-i "$SSH_KEY")
 fi
 
-SSH_CMD=(ssh "${SSH_OPTS[@]}" "$SSH_TARGET")
-SCP_CMD=(scp "${SCP_OPTS[@]}")
-RSYNC_RSH="ssh ${SSH_OPTS[*]}"
+# 密码登录：通过 SSHPASS 环境变量交给 sshpass，脚本参数不落盘、不回显
+SSH_PASSWORD="${SSH_PASSWORD:-}"
+if [ -n "$SSH_PASSWORD" ]; then
+  if ! command -v sshpass >/dev/null 2>&1; then
+    echo "已提供 SSH_PASSWORD 但缺少 sshpass：macOS 可 brew install sshpass" >&2
+    exit 1
+  fi
+  export SSHPASS="$SSH_PASSWORD"
+  SSH_CMD=(sshpass -e ssh "${SSH_OPTS[@]}" "$SSH_TARGET")
+  SCP_CMD=(sshpass -e scp "${SCP_OPTS[@]}")
+  RSYNC_RSH="sshpass -e ssh ${SSH_OPTS[*]}"
+else
+  SSH_CMD=(ssh "${SSH_OPTS[@]}" "$SSH_TARGET")
+  SCP_CMD=(scp "${SCP_OPTS[@]}")
+  RSYNC_RSH="ssh ${SSH_OPTS[*]}"
+fi
 
 REMOTE_SUDO=""
 if [ "$APP_OWNER" != "root" ]; then

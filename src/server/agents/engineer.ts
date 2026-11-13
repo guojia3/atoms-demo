@@ -1,7 +1,7 @@
 // 工程师 Alex：单文件 HTML 生成；编辑优先全量重写（Patch 作为 P1 在 runner 内实现）
 import { isMockMode } from '../config.js'
 import { streamChat } from '../llm/client.js'
-import { escapeHtml, mockHtml, pickTemplate, type TemplateKind } from '../mock/templates.js'
+import { escapeHtml, mockHtml, pickTemplate, TEMPLATE_LABELS, type TemplateKind } from '../mock/templates.js'
 import { extractHtml, staticCheck } from '../verify/static-check.js'
 import type { Plan } from './planner.js'
 
@@ -114,10 +114,6 @@ const VARIANT_COLORS: Record<TemplateKind, Array<[string, string]>> = {
     ['#4338ca', '#115e59'],
     ['#eef2ff', '#ecfdf5'],
   ],
-  calculator: [
-    ['#4f46e5', '#0d9488'],
-    ['#4338ca', '#0f766e'],
-  ],
   habit: [
     ['#16a34a', '#ea580c'],
     ['#15803d', '#c2410c'],
@@ -125,6 +121,33 @@ const VARIANT_COLORS: Record<TemplateKind, Array<[string, string]>> = {
     ['#86efac', '#fed7aa'],
     ['#166534', '#9a3412'],
     ['#eff4f0', '#fff7ed'],
+  ],
+  game2048: [
+    ['#8f7a66', '#667a8f'],
+    ['#bbada0', '#a0adb8'],
+    ['#f2b179', '#79aef2'],
+    ['#f59563', '#639af5'],
+    ['#f67c5f', '#5f8df6'],
+    ['#f65e3b', '#3b6cf6'],
+  ],
+  pomodoro: [
+    ['#4f46e5', '#0f766e'],
+    ['#4338ca', '#115e59'],
+    ['#eef2ff', '#ecfdf5'],
+    ['#c7d2fe', '#99f6e4'],
+  ],
+  notes: [
+    ['#4f46e5', '#0f766e'],
+    ['#4338ca', '#115e59'],
+    ['#eef2ff', '#ecfdf5'],
+    ['#c7d2fe', '#99f6e4'],
+  ],
+  expense: [
+    ['#4f46e5', '#0f766e'],
+    ['#4338ca', '#115e59'],
+    ['#eef2ff', '#ecfdf5'],
+    ['#c7d2fe', '#99f6e4'],
+    ['#dc2626', '#b91c1c'],
   ],
 }
 
@@ -161,7 +184,7 @@ export function mockGenerated(
     html: withVariant(mockHtml(kind, prompt), kind, variant),
     model: 'atoms-mock',
     source: 'mock',
-    notes: [`演示模式：使用内置「${kind === 'kanban' ? '任务看板' : kind === 'calculator' ? '计算器' : '习惯打卡'}」模板`],
+    notes: [`演示模式：使用内置「${TEMPLATE_LABELS[kind]}」模板`],
     durationMs: Date.now() - started,
   }
 }

@@ -32,7 +32,8 @@ interface Props {
 export default function SharePage({ user }: Props) {
   const { slug = '' } = useParams()
   const [data, setData] = useState<ShareData | null>(null)
-  const [kv, setKv] = useState<Record<string, string>>({})
+  // null 表示 KV 尚未拉取完成：等数据就绪后再挂载沙箱，避免 iframe 先以空存储加载一次
+  const [kv, setKv] = useState<Record<string, string> | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -98,7 +99,7 @@ export default function SharePage({ user }: Props) {
               返回首页
             </Link>
           </div>
-        ) : !data ? (
+        ) : !data || kv === null ? (
           <div className="grid flex-1 place-items-center text-[13px] text-neutral-400">正在加载应用…</div>
         ) : (
           <>

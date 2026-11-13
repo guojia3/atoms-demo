@@ -81,7 +81,7 @@ function PlanCard({ plan }: { plan: Plan }) {
           {plan.checklist.map((c, i) => (
             <li key={c.id} className="flex gap-1.5 text-[11px] leading-5 text-neutral-600">
               <span className="text-neutral-400">{i + 1}.</span>
-              {c.text}
+              <span className="min-w-0 break-words">{c.text}</span>
             </li>
           ))}
         </ul>
@@ -157,8 +157,10 @@ function ReportCard({ report, onFix }: { report: Report; onFix?: () => void }) {
         {checklist.map((item) => (
           <div key={item.id || item.text} className="flex items-start gap-2 text-[12px] leading-5">
             <span className={`mt-0.5 shrink-0 ${item.pass ? 'text-emerald-600' : 'text-red-500'}`}>{item.pass ? '✓' : '✕'}</span>
-            <span className="min-w-0 flex-1 text-neutral-700">{item.text || item.label}</span>
-            {!item.pass && <span className="hidden shrink-0 text-[11px] text-neutral-400 sm:inline">{item.evidence}</span>}
+            <span className="min-w-0 flex-1 break-words text-neutral-700">{item.text || item.label}</span>
+            {!item.pass && (
+              <span className="hidden max-w-[45%] shrink-0 truncate text-[11px] text-neutral-400 sm:inline-block">{item.evidence}</span>
+            )}
           </div>
         ))}
         {failedStatic.length > 0 && (
@@ -361,6 +363,8 @@ export default function Workspace({ user }: Props) {
   const [sharePath, setSharePath] = useState('')
   const [loading, setLoading] = useState(true)
   const [pickMode, setPickMode] = useState(false)
+  // md–xl（768–1279px）区间左栏改为抽屉：默认收起，保证预览区可用宽度；≥1280px 恢复固定栏
+  const [chatRailOpen, setChatRailOpen] = useState(false)
 
   const sandboxRef = useRef<SandboxHandle>(null)
   const streamAbortRef = useRef<AbortController | null>(null)
@@ -581,6 +585,7 @@ export default function Workspace({ user }: Props) {
     setSharePath('')
     setPickedTarget(null)
     setMobilePane('chat')
+    setChatRailOpen(false)
     setTab('preview')
     setLoading(true)
 
@@ -857,11 +862,32 @@ export default function Workspace({ user }: Props) {
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1">
-        {/* 左侧对话 */}
+      <div className="relative flex min-h-0 flex-1">
+        {chatRailOpen && (
+          <div
+            className="fixed inset-x-0 bottom-0 top-14 z-30 hidden bg-neutral-900/30 md:block xl:hidden"
+            onClick={() => setChatRailOpen(false)}
+          />
+        )}
+        {/* 左侧对话：≥1280px 固定 400px；768–1279px 为可收起抽屉；<768px 由顶部切换控制 */}
         <aside
-          className={`${mobilePane === 'chat' ? 'flex' : 'hidden'} min-h-0 w-full flex-col border-r border-neutral-200 bg-white md:flex md:w-[400px] md:shrink-0`}
+          className={[
+            'min-h-0 w-full flex-col border-r border-neutral-200 bg-white',
+            mobilePane === 'chat' ? 'flex' : 'hidden',
+            chatRailOpen
+              ? 'md:fixed md:bottom-0 md:left-0 md:top-14 md:z-40 md:flex md:w-[380px] md:max-w-[90vw] md:shadow-2xl xl:static xl:inset-auto xl:z-auto xl:w-[400px] xl:min-w-[320px] xl:max-w-none xl:shrink-0 xl:shadow-none'
+              : 'md:hidden xl:flex xl:w-[400px] xl:min-w-[320px] xl:shrink-0',
+          ].join(' ')}
         >
+          <div className="hidden shrink-0 items-center justify-between border-b border-neutral-200 px-4 py-2 md:flex xl:hidden">
+            <span className="text-[12px] font-medium text-neutral-700">对话 / 验收报告</span>
+            <button
+              onClick={() => setChatRailOpen(false)}
+              className="rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-50"
+            >
+              收起
+            </button>
+          </div>
           <div ref={messageScrollRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4">
             <div className="space-y-3">
               {messages.length === 0 && !running && !liveReport && (
@@ -953,18 +979,26 @@ export default function Workspace({ user }: Props) {
         {/* 右侧预览 */}
         <main className={`${mobilePane === 'preview' ? 'flex' : 'hidden'} min-h-0 min-w-0 flex-1 flex-col md:flex`}>
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-neutral-200 bg-white px-3 py-2">
-            <div className="flex items-center gap-1 rounded-lg bg-neutral-100 p-0.5">
-              {(['desktop', 'mobile'] as const).map((d) => (
-                <button
-                  key={d}
-                  onClick={() => setDevice(d)}
-                  className={`rounded-md px-2.5 py-1 text-[11px] transition ${
-                    device === d ? 'bg-white text-neutral-800 shadow-sm' : 'text-neutral-500'
-                  }`}
-                >
-                  {d === 'desktop' ? '桌面' : '手机'}
-                </button>
-              ))}
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setChatRailOpen(true)}
+                className="hidden rounded-lg border border-neutral-200 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-50 md:block xl:hidden"
+              >
+                对话 / 报告
+              </button>
+              <div className="flex items-center gap-1 rounded-lg bg-neutral-100 p-0.5">
+                {(['desktop', 'mobile'] as const).map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => setDevice(d)}
+                    className={`rounded-md px-2.5 py-1 text-[11px] transition ${
+                      device === d ? 'bg-white text-neutral-800 shadow-sm' : 'text-neutral-500'
+                    }`}
+                  >
+                    {d === 'desktop' ? '桌面' : '手机'}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="flex items-center gap-1.5">
               {pickMode && <span className="text-[10px] text-indigo-600">点选模式：点击页面元素</span>}
