@@ -45,6 +45,9 @@ if [ -n "$SSH_PASSWORD" ]; then
     exit 1
   fi
   export SSHPASS="$SSH_PASSWORD"
+  # 密码模式强制走 password/keyboard-interactive，避免先尝试公钥导致密码提示被跳过
+  SSH_OPTS+=(-o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no)
+  SCP_OPTS+=(-o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no)
   SSH_CMD=(sshpass -e ssh "${SSH_OPTS[@]}" "$SSH_TARGET")
   SCP_CMD=(sshpass -e scp "${SCP_OPTS[@]}")
   RSYNC_RSH="sshpass -e ssh ${SSH_OPTS[*]}"
