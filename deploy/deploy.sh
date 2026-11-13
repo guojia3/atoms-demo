@@ -12,6 +12,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short HEAD)}"
 APP_DIR="${APP_DIR:-/opt/atoms}"
 SSH_PORT="${SSH_PORT:-22}"
 SSH_TARGET="${SSH_TARGET:-}"
@@ -76,18 +77,18 @@ echo "== 4/6 上传 .env 并收紧权限 =="
 "${SCP_CMD[@]}" .env "$SSH_TARGET:$APP_DIR/.env"
 "${SSH_CMD[@]}" "chmod 600 '$APP_DIR/.env'"
 
-echo "== 5/6 构建并启动 =="
+echo "== 5/6 构建并启动（GIT_COMMIT=$GIT_COMMIT）=="
 if [ -n "${DOMAIN:-}" ]; then
   if [ -n "$REMOTE_SUDO" ]; then
-    "${SSH_CMD[@]}" "cd '$APP_DIR' && sudo -n env DOMAIN='$DOMAIN' docker compose --profile tls up -d --build"
+    "${SSH_CMD[@]}" "cd '$APP_DIR' && sudo -n env DOMAIN='$DOMAIN' GIT_COMMIT='$GIT_COMMIT' docker compose --profile tls up -d --build"
   else
-    "${SSH_CMD[@]}" "cd '$APP_DIR' && DOMAIN='$DOMAIN' docker compose --profile tls up -d --build"
+    "${SSH_CMD[@]}" "cd '$APP_DIR' && DOMAIN='$DOMAIN' GIT_COMMIT='$GIT_COMMIT' docker compose --profile tls up -d --build"
   fi
 else
   if [ -n "$REMOTE_SUDO" ]; then
-    "${SSH_CMD[@]}" "cd '$APP_DIR' && sudo -n docker compose up -d --build"
+    "${SSH_CMD[@]}" "cd '$APP_DIR' && sudo -n env GIT_COMMIT='$GIT_COMMIT' docker compose up -d --build"
   else
-    "${SSH_CMD[@]}" "cd '$APP_DIR' && docker compose up -d --build"
+    "${SSH_CMD[@]}" "cd '$APP_DIR' && GIT_COMMIT='$GIT_COMMIT' docker compose up -d --build"
   fi
 fi
 

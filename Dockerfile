@@ -7,6 +7,8 @@ COPY . .
 RUN npm run build
 
 FROM node:24-alpine
+ARG GIT_COMMIT=""
+ENV GIT_COMMIT=$GIT_COMMIT
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
