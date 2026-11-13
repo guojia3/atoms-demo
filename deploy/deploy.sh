@@ -80,7 +80,7 @@ echo "== 4/6 上传 .env 并收紧权限 =="
 "${SCP_CMD[@]}" .env "$SSH_TARGET:$APP_DIR/.env"
 "${SSH_CMD[@]}" "chmod 600 '$APP_DIR/.env'"
 
-echo "== 5/6 构建并启动（GIT_COMMIT=$GIT_COMMIT）=="
+echo "== 5/6 构建并启动（GIT_COMMIT=${GIT_COMMIT}）=="
 if [ -n "${DOMAIN:-}" ]; then
   if [ -n "$REMOTE_SUDO" ]; then
     "${SSH_CMD[@]}" "cd '$APP_DIR' && sudo -n env DOMAIN='$DOMAIN' GIT_COMMIT='$GIT_COMMIT' docker compose --profile tls up -d --build"
