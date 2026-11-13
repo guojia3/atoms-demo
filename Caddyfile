@@ -1,0 +1,11 @@
+# 可选 HTTPS 网关：示例部署为 HTTP + IP 直连，未启用本配置
+# 有域名时由 Caddy 自动申请证书并反代 Atoms
+# 启动：DOMAIN=your.domain docker compose --profile tls up -d --build
+{$DOMAIN:localhost} {
+	encode gzip zstd
+	reverse_proxy atoms:3000
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}

@@ -1,0 +1,51 @@
+services:
+  atoms:
+    build: .
+    container_name: atoms-app
+    restart: unless-stopped
+    ports:
+      # 无域名时用 80 作为公网 HTTP 入口（国内云主机控制台防火墙常只放行 80/443）
+      - "80:3000"
+      - "3000:3000"
+      # 注意：启用 Caddy（DOMAIN + --profile tls）时，80 由 caddy 占用，需移除上面的 "80:3000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_PATH: /data/atoms.db
+      PROBE_TIMEOUT_MS: "15000"
+      RACE_COUNT: "2"
+    volumes:
+      - atoms-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # 可选：绑定域名 + 自动 HTTPS。启用时在 .env 设置 DOMAIN 并运行
+  #   docker compose --profile tls up -d --build
+  caddy:
+    image: caddy:2-alpine
+    container_name: atoms-caddy
+    restart: unless-stopped
+    profiles: ["tls"]
+    depends_on:
+      - atoms
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  atoms-data:
+  caddy-data:
+  caddy-config:

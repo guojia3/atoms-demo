@@ -1,0 +1,10 @@
+# 构建上下文排除：密钥、依赖、数据与构建产物不进镜像
+.env
+.env.local
+node_modules
+dist
+data
+deploy
+docs
+*.log
+.DS_Store
