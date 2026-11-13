@@ -7,50 +7,88 @@ interface Props {
   onLogout: () => void
 }
 
+/** 原创原子标记：四条轨道 + 中心点，不使用官方 logo */
+export function BrandMark({ size = 26, className = '' }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 32 32"
+      fill="none"
+      aria-hidden="true"
+      className={className}
+    >
+      <ellipse cx="16" cy="16" rx="13" ry="5.4" stroke="currentColor" strokeWidth="1.6" />
+      <ellipse
+        cx="16"
+        cy="16"
+        rx="13"
+        ry="5.4"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        transform="rotate(60 16 16)"
+      />
+      <ellipse
+        cx="16"
+        cy="16"
+        rx="13"
+        ry="5.4"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        transform="rotate(120 16 16)"
+      />
+      <circle cx="16" cy="16" r="2.6" fill="currentColor" />
+    </svg>
+  )
+}
+
 export default function Header({ user, onLogout }: Props) {
   const logout = async () => {
     await api('/api/auth/logout', { method: 'POST' }).catch(() => {})
+    onLogout()
     location.reload()
   }
+
   return (
-    <header className="sticky top-0 z-30 border-b border-neutral-200/80 bg-white/80 backdrop-blur">
-      <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
-        <Link to="/" className="flex items-center gap-2.5">
-          <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-[15px] font-bold text-white shadow-sm">
-            A
+    <header className="sticky top-0 z-40 border-b border-line bg-white/85 backdrop-blur-xl">
+      <div className="mx-auto flex h-16 max-w-[1200px] items-center justify-between gap-4 px-4 sm:px-6">
+        <div className="flex min-w-0 items-center gap-6">
+          <Link to="/" className="flex shrink-0 items-center gap-2.5 text-ink">
+            <BrandMark size={24} />
+            <span className="text-[15px] font-semibold tracking-tight">Atoms Demo</span>
+          </Link>
+          <nav className="hidden items-center gap-1 md:flex" aria-label="主导航">
+            <a className="chip-tab" data-active="true" href="/">
+              首页
+            </a>
+            <a className="chip-tab" href="/#samples">
+              预置成品
+            </a>
+            <a className="chip-tab" href="/#projects">
+              我的项目
+            </a>
+          </nav>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="hidden rounded-full border border-line bg-white px-2.5 py-1 text-[11px] text-ink-muted lg:inline">
+            {user?.kind === 'guest' ? '游客模式' : '智能体生成应用'}
           </span>
-          <span className="text-[15px] font-semibold tracking-tight text-neutral-900">Atoms Demo</span>
-          <span className="hidden rounded-full border border-neutral-200 px-2 py-0.5 text-[11px] text-neutral-500 sm:inline">
-            智能体生成应用
-          </span>
-        </Link>
-        <div className="flex items-center gap-2">
           {user ? (
-            <>
-              {user.kind === 'guest' ? (
-                <>
-                  <span className="hidden rounded-full bg-amber-50 px-2.5 py-1 text-[12px] font-medium text-amber-700 sm:inline">
-                    游客模式
-                  </span>
-                  <Link
-                    to="/login"
-                    className="rounded-lg bg-neutral-900 px-3.5 py-1.5 text-[13px] font-medium text-white hover:bg-neutral-800"
-                  >
-                    登录 / 注册
-                  </Link>
-                </>
-              ) : (
-                <>
-                  <span className="hidden text-[13px] text-neutral-500 sm:inline">{user.email}</span>
-                  <button
-                    onClick={logout}
-                    className="rounded-lg border border-neutral-200 px-3 py-1.5 text-[13px] text-neutral-600 hover:bg-neutral-50"
-                  >
-                    退出
-                  </button>
-                </>
-              )}
-            </>
+            user.kind === 'guest' ? (
+              <Link to="/login" className="btn btn-primary btn-pill btn-sm">
+                登录 / 注册
+              </Link>
+            ) : (
+              <>
+                <span className="hidden max-w-[180px] truncate text-[12px] text-ink-muted sm:inline">
+                  {user.email}
+                </span>
+                <button onClick={logout} className="btn btn-ghost btn-pill btn-sm">
+                  退出
+                </button>
+              </>
+            )
           ) : null}
         </div>
       </div>

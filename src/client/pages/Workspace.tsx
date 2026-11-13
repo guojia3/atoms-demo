@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import Sandbox, { type SandboxHandle } from '../components/Sandbox'
+import { BrandMark } from '../components/Header'
 import { api, downloadHtml } from '../api'
 import type {
   ConsoleEntry,
@@ -41,13 +42,13 @@ function shortModel(model?: string | null): string {
 
 function ScoreRing({ score, size = 44 }: { score: number | null; size?: number }) {
   const value = Math.max(0, Math.min(100, score ?? 0))
-  const color = value >= 85 ? '#059669' : value >= 70 ? '#4f46e5' : value >= 50 ? '#d97706' : '#dc2626'
+  const color = value >= 85 ? '#0f9f6e' : value >= 70 ? '#4267ff' : value >= 50 ? '#b45309' : '#dc2626'
   return (
     <div
-      className="grid shrink-0 place-items-center rounded-full border-2 bg-white"
+      className="grid shrink-0 place-items-center rounded-full border-[1.5px] bg-white"
       style={{ width: size, height: size, borderColor: color }}
     >
-      <span className="text-[15px] font-semibold" style={{ color }}>
+      <span className="font-mono-ui text-[14px] font-semibold" style={{ color }}>
         {score ?? '—'}
       </span>
     </div>
@@ -56,31 +57,29 @@ function ScoreRing({ score, size = 44 }: { score: number | null; size?: number }
 
 function PlanCard({ plan }: { plan: Plan }) {
   return (
-    <div className="animate-fade-up rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4">
+    <div className="animate-fade-up rounded-2xl border border-line bg-white p-4">
       <div className="flex items-start justify-between gap-2">
-        <div>
-          <div className="text-[11px] font-medium uppercase tracking-wide text-indigo-500">需求拆解 · Mike</div>
-          <h3 className="mt-1 text-[15px] font-semibold text-neutral-900">{plan.title}</h3>
+        <div className="min-w-0">
+          <div className="text-[10px] font-medium tracking-[0.08em] text-ink-muted uppercase">需求拆解 · Mike</div>
+          <h3 className="mt-1 text-[15px] font-semibold text-ink">{plan.title}</h3>
         </div>
-        <span className="rounded-full bg-white px-2 py-0.5 text-[10px] text-indigo-500 ring-1 ring-indigo-100">
-          {plan.source === 'model' ? '模型规划' : '内置方案'}
-        </span>
+        <span className="pill h-5 shrink-0 px-2 text-[10px]">{plan.source === 'model' ? '模型规划' : '内置方案'}</span>
       </div>
-      <p className="mt-2 text-[12px] leading-5 text-neutral-600">{plan.summary}</p>
-      {plan.notes && <p className="mt-1 text-[11px] text-amber-600">{plan.notes}</p>}
+      <p className="mt-2 text-[12px] leading-5 text-ink-soft">{plan.summary}</p>
+      {plan.notes && <p className="mt-1 text-[11px] text-warn">{plan.notes}</p>}
       <div className="mt-3 flex flex-wrap gap-1.5">
         {plan.features.slice(0, 5).map((f) => (
-          <span key={f} className="rounded-md bg-white px-2 py-1 text-[11px] text-neutral-600 ring-1 ring-neutral-200">
+          <span key={f} className="rounded-full bg-canvas px-2.5 py-1 text-[11px] text-ink-soft">
             {f}
           </span>
         ))}
       </div>
-      <div className="mt-3 rounded-xl bg-white/70 p-3 ring-1 ring-indigo-100">
-        <div className="text-[11px] font-medium text-neutral-500">验收清单（{plan.checklist.length} 条）</div>
+      <div className="mt-3 rounded-xl border border-line bg-canvas-soft p-3">
+        <div className="text-[11px] font-medium text-ink-muted">验收清单（{plan.checklist.length} 条）</div>
         <ul className="mt-1.5 space-y-1">
           {plan.checklist.map((c, i) => (
-            <li key={c.id} className="flex gap-1.5 text-[11px] leading-5 text-neutral-600">
-              <span className="text-neutral-400">{i + 1}.</span>
+            <li key={c.id} className="flex gap-1.5 text-[11px] leading-5 text-ink-soft">
+              <span className="text-ink-faint">{i + 1}.</span>
               <span className="min-w-0 break-words">{c.text}</span>
             </li>
           ))}
@@ -100,21 +99,21 @@ function ReportCard({ report, onFix }: { report: Report; onFix?: () => void }) {
   const passCount = checklist.filter((i) => i.pass).length
 
   return (
-    <div className="animate-fade-up overflow-hidden rounded-2xl border border-neutral-200 bg-white">
-      <div className="flex items-center gap-3 border-b border-neutral-100 bg-neutral-50/70 px-4 py-3">
+    <div className="animate-fade-up overflow-hidden rounded-2xl border border-line bg-white">
+      <div className="flex items-center gap-3 border-b border-line bg-canvas-soft px-4 py-3">
         <ScoreRing score={report.score} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[14px] font-semibold text-neutral-900">验收报告</span>
+            <span className="text-[14px] font-semibold text-ink">验收报告</span>
             <span
               className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                passed ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'
+                passed ? 'bg-ok-soft text-ok' : 'bg-warn-soft text-warn'
               }`}
             >
               {passed ? '已通过' : '待修复'}
             </span>
           </div>
-          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-neutral-500">
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono-ui text-[10px] text-ink-muted">
             <span>静态 {report.parts.static}/10</span>
             <span>实测 {report.parts.probe}/50</span>
             <span>清单 {report.parts.checklist}/40</span>
@@ -122,28 +121,23 @@ function ReportCard({ report, onFix }: { report: Report; onFix?: () => void }) {
           </div>
         </div>
         {onFix && (!passed || checklist.some((i) => !i.pass)) && (
-          <button
-            onClick={onFix}
-            className="shrink-0 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-indigo-700"
-          >
+          <button onClick={onFix} className="btn btn-primary btn-pill btn-sm shrink-0">
             一键修复
           </button>
         )}
-        <button onClick={() => setExpanded((v) => !v)} className="shrink-0 text-[11px] text-indigo-600 hover:underline">
+        <button onClick={() => setExpanded((v) => !v)} className="shrink-0 text-[11px] text-brand hover:underline">
           {expanded ? '收起' : '完整报告'}
         </button>
       </div>
 
       {report.race && report.race.length > 1 && (
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-neutral-100 bg-neutral-50/60 px-4 py-2">
-          <span className="text-[10px] text-neutral-400">双路赛马</span>
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-line bg-canvas-soft px-4 py-2">
+          <span className="text-[10px] text-ink-faint">双路赛马</span>
           {report.race.map((c) => (
             <span
               key={c.id}
               className={`rounded-full px-2 py-0.5 text-[10px] ${
-                c.adopted
-                  ? 'bg-emerald-50 font-medium text-emerald-700 ring-1 ring-emerald-200'
-                  : 'bg-white text-neutral-500 ring-1 ring-neutral-200'
+                c.adopted ? 'bg-ok-soft font-medium text-ok' : 'bg-canvas text-ink-muted'
               }`}
               title={`${shortModel(c.model)} · ${c.parts.static}/10 + ${c.parts.probe}/50 + ${c.parts.checklist}/40`}
             >
@@ -156,59 +150,59 @@ function ReportCard({ report, onFix }: { report: Report; onFix?: () => void }) {
       <div className="space-y-1.5 px-4 py-3">
         {checklist.map((item) => (
           <div key={item.id || item.text} className="flex items-start gap-2 text-[12px] leading-5">
-            <span className={`mt-0.5 shrink-0 ${item.pass ? 'text-emerald-600' : 'text-red-500'}`}>{item.pass ? '✓' : '✕'}</span>
-            <span className="min-w-0 flex-1 break-words text-neutral-700">{item.text || item.label}</span>
+            <span className={`mt-0.5 shrink-0 ${item.pass ? 'text-ok' : 'text-bad'}`}>{item.pass ? '✓' : '✕'}</span>
+            <span className="min-w-0 flex-1 break-words text-ink-soft">{item.text || item.label}</span>
             {!item.pass && (
-              <span className="hidden max-w-[45%] shrink-0 truncate text-[11px] text-neutral-400 sm:inline-block">{item.evidence}</span>
+              <span className="hidden max-w-[45%] shrink-0 truncate text-[11px] text-ink-faint sm:inline-block">{item.evidence}</span>
             )}
           </div>
         ))}
         {failedStatic.length > 0 && (
-          <div className="text-[11px] text-amber-600">静态检查未通过：{failedStatic.map((i) => i.label).join('、')}</div>
+          <div className="text-[11px] text-warn">静态检查未通过：{failedStatic.map((i) => i.label).join('、')}</div>
         )}
       </div>
 
       {expanded && (
-        <div className="space-y-3 border-t border-neutral-100 px-4 py-3">
+        <div className="space-y-3 border-t border-line px-4 py-3">
           <div>
-            <div className="mb-1 text-[11px] font-medium text-neutral-500">实测明细（沙箱探针）</div>
+            <div className="mb-1 text-[11px] font-medium text-ink-muted">实测明细（沙箱探针）</div>
             {probe.map((item) => (
-              <div key={item.key} className="flex items-start justify-between gap-3 py-1 text-[11px]">
+              <div key={item.key} className="flex items-start justify-between gap-3 border-b border-line py-1 text-[11px] last:border-0">
                 <div className="min-w-0">
-                  <div className="text-neutral-700">
-                    {item.label} <span className="text-neutral-400">{item.score}/{item.max}</span>
+                  <div className="text-ink-soft">
+                    {item.label} <span className="font-mono-ui text-ink-faint">{item.score}/{item.max}</span>
                   </div>
-                  <div className="text-neutral-400">{item.evidence}</div>
+                  <div className="text-ink-faint">{item.evidence}</div>
                 </div>
               </div>
             ))}
-            {probe.length === 0 && <div className="text-[11px] text-neutral-400">未收到浏览器实测数据</div>}
+            {probe.length === 0 && <div className="text-[11px] text-ink-faint">未收到浏览器实测数据</div>}
           </div>
           <div>
-            <div className="mb-1 text-[11px] font-medium text-neutral-500">验收清单证据</div>
+            <div className="mb-1 text-[11px] font-medium text-ink-muted">验收清单证据</div>
             {checklist.map((item) => (
-              <div key={`${item.id}-e`} className="py-1 text-[11px]">
-                <span className={item.pass ? 'text-emerald-600' : 'text-red-500'}>{item.pass ? '通过' : '未通过'}</span>
-                <span className="text-neutral-500"> · {item.text}</span>
-                <div className="text-neutral-400">{item.evidence}</div>
+              <div key={`${item.id}-e`} className="border-b border-line py-1 text-[11px] last:border-0">
+                <span className={item.pass ? 'text-ok' : 'text-bad'}>{item.pass ? '通过' : '未通过'}</span>
+                <span className="text-ink-soft"> · {item.text}</span>
+                <div className="text-ink-faint">{item.evidence}</div>
               </div>
             ))}
           </div>
           <div>
-            <div className="mb-1 text-[11px] font-medium text-neutral-500">静态完整性</div>
+            <div className="mb-1 text-[11px] font-medium text-ink-muted">静态完整性</div>
             {staticItems.map((item) => (
-              <div key={item.key} className="flex justify-between gap-2 text-[11px] text-neutral-500">
+              <div key={item.key} className="flex justify-between gap-2 text-[11px] text-ink-muted">
                 <span>
-                  <span className={item.pass ? 'text-emerald-600' : 'text-red-500'}>{item.pass ? '✓' : '✕'}</span> {item.label}
+                  <span className={item.pass ? 'text-ok' : 'text-bad'}>{item.pass ? '✓' : '✕'}</span> {item.label}
                 </span>
-                <span className="text-neutral-400">{item.detail}</span>
+                <span className="text-ink-faint">{item.detail}</span>
               </div>
             ))}
           </div>
           {report.notes && report.notes.length > 0 && (
-            <div className="rounded-lg bg-amber-50 px-2.5 py-2 text-[11px] text-amber-700">{report.notes.join('；')}</div>
+            <div className="rounded-lg bg-warn-soft px-2.5 py-2 text-[11px] text-warn">{report.notes.join('；')}</div>
           )}
-          <div className="text-[10px] text-neutral-400">
+          <div className="text-[10px] leading-5 text-ink-faint">
             评分用于辅助择优：静态 10 + 浏览器实测 50 + 清单 40。清单判定来源：
             {report.reviewSource === 'model' ? '验收模型' : '可解释启发式'}。
           </div>
@@ -229,19 +223,19 @@ function ActivityCard({
 }) {
   const visible = STEP_ORDER.filter((k) => steps[k] || runStatus === 'running')
   return (
-    <div className="animate-fade-up rounded-2xl border border-neutral-200 bg-white p-4">
+    <div className="animate-fade-up rounded-2xl border border-line bg-white p-4">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-neutral-400">
+        <span className="text-[10px] font-medium tracking-[0.08em] text-ink-muted uppercase">
           {runStatus === 'running' ? '正在执行' : '执行记录'}
         </span>
         {runStatus === 'running' && (
-          <span className="flex items-center gap-1.5 text-[11px] text-indigo-600">
-            <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-indigo-500" />
+          <span className="flex items-center gap-1.5 text-[11px] text-brand">
+            <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-brand" />
             智能体工作中
           </span>
         )}
       </div>
-      <ol className="mt-2.5 space-y-2">
+      <ol className="mt-3 space-y-2.5">
         {visible.map((key) => {
           const step = steps[key] || { key, label: STEP_DEFAULT[key], status: 'running' as const }
           return (
@@ -249,32 +243,32 @@ function ActivityCard({
               <span
                 className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full text-[9px] ${
                   step.status === 'done'
-                    ? 'bg-emerald-100 text-emerald-700'
+                    ? 'bg-ok-soft text-ok'
                     : step.status === 'failed'
-                      ? 'bg-red-100 text-red-600'
-                      : 'bg-indigo-100 text-indigo-600'
+                      ? 'bg-bad-soft text-bad'
+                      : 'bg-brand-soft text-brand'
                 }`}
               >
                 {step.status === 'done' ? '✓' : step.status === 'failed' ? '!' : '•'}
               </span>
               <div className="min-w-0">
-                <div className="text-[12px] text-neutral-700">{step.label}</div>
-                {step.detail && <div className="mt-0.5 text-[10px] leading-4 text-neutral-400">{step.detail}</div>}
+                <div className="text-[12px] text-ink-soft">{step.label}</div>
+                {step.detail && <div className="mt-0.5 text-[10px] leading-4 text-ink-muted">{step.detail}</div>}
               </div>
             </li>
           )
         })}
       </ol>
       {progress && runStatus === 'running' && (
-        <div className="mt-3 rounded-lg bg-neutral-50 p-2.5">
-          <div className="flex justify-between text-[10px] text-neutral-500">
+        <div className="mt-3 rounded-xl border border-line bg-canvas-soft p-3">
+          <div className="flex justify-between font-mono-ui text-[10px] text-ink-muted">
             <span>流式生成中</span>
             <span>{progress.chars} 字符</span>
           </div>
-          <div className="mt-1 h-1 overflow-hidden rounded-full bg-neutral-200">
-            <div className="h-full w-1/2 animate-pulse rounded-full bg-indigo-500" />
+          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-black/10">
+            <div className="h-full w-1/2 animate-pulse rounded-full bg-brand" />
           </div>
-          <div className="mt-1.5 line-clamp-1 font-mono text-[10px] text-neutral-400">{progress.tail}</div>
+          <div className="mt-1.5 line-clamp-1 font-mono-ui text-[10px] text-ink-faint">{progress.tail}</div>
         </div>
       )}
     </div>
@@ -285,7 +279,7 @@ function MessageItem({ msg, onFix }: { msg: Message; onFix?: (report: Report) =>
   if (msg.role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-indigo-600 px-3.5 py-2.5 text-[12px] leading-5 text-white">
+        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-ink px-3.5 py-2.5 text-[12px] leading-5 text-white">
           {msg.content}
         </div>
       </div>
@@ -303,11 +297,11 @@ function MessageItem({ msg, onFix }: { msg: Message; onFix?: (report: Report) =>
   }
   if (msg.kind === 'version') {
     return (
-      <div className="flex items-center gap-2 rounded-xl border border-neutral-200 bg-neutral-50/80 px-3 py-2 text-[11px] text-neutral-500">
-        <span className="grid h-5 w-5 place-items-center rounded-md bg-white text-indigo-600 ring-1 ring-neutral-200">✓</span>
-        <span className="font-medium text-neutral-700">{msg.content}</span>
-        {msg.meta?.score != null && <span className="text-neutral-400">· {msg.meta.score} 分</span>}
-        {msg.meta?.model && <span className="ml-auto text-neutral-400">{shortModel(msg.meta.model)}</span>}
+      <div className="flex items-center gap-2 rounded-xl border border-line bg-canvas-soft px-3 py-2 text-[11px] text-ink-muted">
+        <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-brand ring-1 ring-line">✓</span>
+        <span className="font-medium text-ink-soft">{msg.content}</span>
+        {msg.meta?.score != null && <span className="font-mono-ui text-ink-muted">· {msg.meta.score} 分</span>}
+        {msg.meta?.model && <span className="ml-auto text-ink-faint">{shortModel(msg.meta.model)}</span>}
       </div>
     )
   }
@@ -316,10 +310,10 @@ function MessageItem({ msg, onFix }: { msg: Message; onFix?: (report: Report) =>
     return (
       <div
         className={`animate-fade-up rounded-2xl border p-3.5 text-[12px] leading-5 ${
-          passed ? 'border-emerald-200 bg-emerald-50/60 text-emerald-800' : 'border-amber-200 bg-amber-50/60 text-amber-800'
+          passed ? 'border-transparent bg-ok-soft text-ok' : 'border-transparent bg-warn-soft text-warn'
         }`}
       >
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide opacity-70">结论</div>
+        <div className="mb-1 text-[10px] font-semibold tracking-[0.08em] uppercase opacity-70">结论</div>
         {msg.content}
       </div>
     )
@@ -327,11 +321,11 @@ function MessageItem({ msg, onFix }: { msg: Message; onFix?: (report: Report) =>
   const system = msg.role === 'system'
   return (
     <div className="flex gap-2.5">
-      <span className="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-[11px] font-bold text-white">
-        A
+      <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-line bg-white text-ink">
+        <BrandMark size={14} />
       </span>
-      <div className={`max-w-[90%] text-[12px] leading-5 ${system ? 'text-neutral-500' : 'text-neutral-700'}`}>
-        {system ? <span className="rounded-lg bg-neutral-100 px-2.5 py-2">{msg.content}</span> : msg.content}
+      <div className={`max-w-[90%] text-[12px] leading-5 ${system ? 'text-ink-muted' : 'text-ink-soft'}`}>
+        {system ? <span className="rounded-lg bg-canvas px-2.5 py-2">{msg.content}</span> : msg.content}
       </div>
     </div>
   )
@@ -747,15 +741,18 @@ export default function Workspace({ user }: Props) {
   }
 
   const messages = project?.messages || []
+  // 完成后服务端消息里已包含报告/结论时，不再重复渲染实时副本
+  const hasReportMessage = messages.some((m) => m.kind === 'report')
+  const hasConclusionMessage = messages.some((m) => m.kind === 'conclusion')
   const running = runStatus === 'running'
   const shareUrl = sharePath ? `${location.origin}${sharePath}` : ''
 
   if (loading) {
     return (
-      <div className="grid h-screen place-items-center bg-neutral-50">
+      <div className="grid h-screen place-items-center bg-canvas">
         <div className="text-center">
-          <div className="mx-auto h-7 w-7 animate-spin rounded-full border-2 border-neutral-200 border-t-indigo-500" />
-          <p className="mt-3 text-[12px] text-neutral-500">加载项目…</p>
+          <div className="mx-auto spinner" />
+          <p className="mt-3 text-[12px] text-ink-muted">加载项目…</p>
         </div>
       </div>
     )
@@ -763,11 +760,11 @@ export default function Workspace({ user }: Props) {
 
   if (!project) {
     return (
-      <div className="grid h-screen place-items-center bg-neutral-50 px-6">
+      <div className="grid h-screen place-items-center bg-canvas px-6">
         <div className="max-w-sm text-center">
-          <h1 className="text-[18px] font-semibold text-neutral-900">无法打开项目</h1>
-          <p className="mt-2 text-[13px] text-neutral-500">{error || '项目不存在或不属于当前账号。'}</p>
-          <Link to="/" className="mt-5 inline-block rounded-xl bg-indigo-600 px-4 py-2 text-[13px] font-medium text-white">
+          <h1 className="text-[18px] font-semibold text-ink">无法打开项目</h1>
+          <p className="mt-2 text-[13px] leading-6 text-ink-muted">{error || '项目不存在或不属于当前账号。'}</p>
+          <Link to="/" className="btn btn-primary mt-5">
             返回首页
           </Link>
         </div>
@@ -776,54 +773,53 @@ export default function Workspace({ user }: Props) {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-neutral-100">
+    <div className="flex h-screen flex-col bg-canvas">
       {/* 顶部栏 */}
-      <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-neutral-200 bg-white px-3 sm:px-5">
+      <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-line bg-white px-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-2">
-          <Link to="/" className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-neutral-500 hover:bg-neutral-100" title="返回首页">
+          <Link
+            to="/"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[14px] text-ink-muted transition hover:bg-canvas hover:text-ink"
+            title="返回首页"
+          >
             ←
           </Link>
-          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-[12px] font-bold text-white">
-            A
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-line bg-white text-ink">
+            <BrandMark size={16} />
           </span>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="truncate text-[14px] font-semibold text-neutral-900">{project.title}</h1>
+              <h1 className="truncate text-[14px] font-semibold text-ink">{project.title}</h1>
               {project.currentVersionId && (
-                <span className="hidden shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] text-neutral-500 sm:inline">
+                <span className="hidden shrink-0 rounded-full bg-canvas px-2 py-0.5 font-mono-ui text-[10px] text-ink-muted sm:inline">
                   v{project.versions[0]?.seq ?? 1}
                 </span>
               )}
               {project.versions[0]?.score != null && (
-                <span className="hidden shrink-0 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-600 sm:inline">
+                <span className="hidden shrink-0 rounded-full bg-brand-soft px-2 py-0.5 font-mono-ui text-[10px] font-medium text-brand sm:inline">
                   {project.versions[0].score} 分
                 </span>
               )}
             </div>
-            <div className="hidden truncate text-[10px] text-neutral-400 sm:block">
+            <div className="hidden truncate text-[10px] text-ink-muted sm:block">
               {project.versions.length} 个版本 · 数据自动保存 · {user?.kind === 'guest' ? '游客模式' : user?.email}
             </div>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <button
-            onClick={() => setVersionsOpen(true)}
-            className="hidden rounded-lg border border-neutral-200 px-2.5 py-1.5 text-[12px] text-neutral-600 hover:bg-neutral-50 sm:inline"
-          >
+          <button onClick={() => setVersionsOpen(true)} className="btn btn-ghost btn-pill btn-sm hidden sm:inline-flex">
             版本历史
           </button>
           {sharePath ? (
-            <button
-              onClick={() => setPublishOpen(true)}
-              className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[12px] font-medium text-emerald-700 hover:bg-emerald-100"
-            >
+            <button onClick={() => setPublishOpen(true)} className="btn btn-pill btn-sm bg-ok-soft text-ok">
+              <span className="h-1.5 w-1.5 rounded-full bg-ok" />
               已发布
             </button>
           ) : (
             <button
               onClick={publish}
               disabled={!project.currentVersionId}
-              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-indigo-700 disabled:bg-neutral-300"
+              className="btn btn-primary btn-pill btn-sm"
             >
               发布
             </button>
@@ -831,7 +827,7 @@ export default function Workspace({ user }: Props) {
           <button
             onClick={() => downloadHtml(project.html, `${project.title}.html`)}
             disabled={!project.html}
-            className="hidden rounded-lg border border-neutral-200 px-2.5 py-1.5 text-[12px] text-neutral-600 hover:bg-neutral-50 disabled:text-neutral-300 sm:inline"
+            className="btn btn-ghost btn-pill btn-sm hidden sm:inline-flex"
           >
             导出
           </button>
@@ -839,14 +835,13 @@ export default function Workspace({ user }: Props) {
       </header>
 
       {/* 移动端切换 */}
-      <div className="flex border-b border-neutral-200 bg-white md:hidden">
+      <div className="flex shrink-0 gap-1 border-b border-line bg-white px-3 py-2 md:hidden">
         {(['chat', 'preview'] as const).map((p) => (
           <button
             key={p}
             onClick={() => setMobilePane(p)}
-            className={`flex-1 py-2 text-[12px] font-medium ${
-              mobilePane === p ? 'border-b-2 border-indigo-500 text-indigo-600' : 'text-neutral-500'
-            }`}
+            data-active={mobilePane === p}
+            className="chip-tab flex-1"
           >
             {p === 'chat' ? '对话 / 报告' : '预览'}
           </button>
@@ -854,9 +849,9 @@ export default function Workspace({ user }: Props) {
       </div>
 
       {error && (
-        <div className="flex items-center justify-between gap-3 border-b border-red-100 bg-red-50 px-4 py-2 text-[12px] text-red-600">
+        <div className="flex items-center justify-between gap-3 border-b border-line bg-bad-soft px-4 py-2 text-[12px] text-bad">
           <span className="truncate">{error}</span>
-          <button onClick={() => setError('')} className="shrink-0 text-red-400 hover:text-red-600">
+          <button onClick={() => setError('')} className="shrink-0 text-bad/70 hover:text-bad">
             ✕
           </button>
         </div>
@@ -865,33 +860,30 @@ export default function Workspace({ user }: Props) {
       <div className="relative flex min-h-0 flex-1">
         {chatRailOpen && (
           <div
-            className="fixed inset-x-0 bottom-0 top-14 z-30 hidden bg-neutral-900/30 md:block xl:hidden"
+            className="fixed inset-x-0 bottom-0 top-14 z-30 hidden bg-ink/25 md:block xl:hidden"
             onClick={() => setChatRailOpen(false)}
           />
         )}
         {/* 左侧对话：≥1280px 固定 400px；768–1279px 为可收起抽屉；<768px 由顶部切换控制 */}
         <aside
           className={[
-            'min-h-0 w-full flex-col border-r border-neutral-200 bg-white',
+            'min-h-0 w-full flex-col border-r border-line bg-white',
             mobilePane === 'chat' ? 'flex' : 'hidden',
             chatRailOpen
-              ? 'md:fixed md:bottom-0 md:left-0 md:top-14 md:z-40 md:flex md:w-[380px] md:max-w-[90vw] md:shadow-2xl xl:static xl:inset-auto xl:z-auto xl:w-[400px] xl:min-w-[320px] xl:max-w-none xl:shrink-0 xl:shadow-none'
+              ? 'md:fixed md:bottom-0 md:left-0 md:top-14 md:z-40 md:flex md:w-[380px] md:max-w-[90vw] md:shadow-[0_24px_60px_-24px_rgba(12,12,12,0.35)] xl:static xl:inset-auto xl:z-auto xl:w-[400px] xl:min-w-[320px] xl:max-w-none xl:shrink-0 xl:shadow-none'
               : 'md:hidden xl:flex xl:w-[400px] xl:min-w-[320px] xl:shrink-0',
           ].join(' ')}
         >
-          <div className="hidden shrink-0 items-center justify-between border-b border-neutral-200 px-4 py-2 md:flex xl:hidden">
-            <span className="text-[12px] font-medium text-neutral-700">对话 / 验收报告</span>
-            <button
-              onClick={() => setChatRailOpen(false)}
-              className="rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-50"
-            >
+          <div className="hidden shrink-0 items-center justify-between border-b border-line px-4 py-2.5 md:flex xl:hidden">
+            <span className="text-[12px] font-medium text-ink-soft">对话 / 验收报告</span>
+            <button onClick={() => setChatRailOpen(false)} className="btn btn-ghost btn-pill btn-sm">
               收起
             </button>
           </div>
           <div ref={messageScrollRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4">
             <div className="space-y-3">
               {messages.length === 0 && !running && !liveReport && (
-                <div className="rounded-2xl border border-dashed border-neutral-200 bg-neutral-50/60 p-4 text-[12px] leading-5 text-neutral-500">
+                <div className="rounded-2xl border border-line bg-canvas-soft p-4 text-[12px] leading-5 text-ink-muted">
                   输入一句话开始生成。智能体会先给出需求拆解与验收清单，再生成可运行页面并逐条验收。
                 </div>
               )}
@@ -904,33 +896,30 @@ export default function Workspace({ user }: Props) {
                   <ActivityCard steps={steps} progress={progress} runStatus={runStatus} />
                 </>
               )}
-              {!running && liveReport && (
+              {!running && liveReport && !hasReportMessage && (
                 <ReportCard report={liveReport} onFix={() => fixReport(liveReport)} />
               )}
-              {!running && liveConclusion && (
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3.5 text-[12px] leading-5 text-emerald-800">
+              {!running && liveConclusion && !hasConclusionMessage && (
+                <div className="rounded-2xl border border-transparent bg-ok-soft p-3.5 text-[12px] leading-5 text-ok">
                   {liveConclusion}
                 </div>
               )}
               {progress && running && (
-                <div className="text-[10px] text-neutral-400">
+                <div className="font-mono-ui text-[10px] text-ink-faint">
                   {shortModel(project.versions[0]?.model)}{progress.tail ? ` · ${progress.tail.slice(0, 60)}…` : ''}
                 </div>
               )}
             </div>
           </div>
 
-          <div className="shrink-0 border-t border-neutral-200 px-3 py-3 sm:px-4">
+          <div className="shrink-0 border-t border-line px-3 py-3 sm:px-4">
             {running ? (
-              <div className="flex items-center justify-between gap-3 rounded-xl bg-neutral-50 px-3 py-2.5">
-                <div className="flex items-center gap-2 text-[12px] text-neutral-500">
-                  <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-indigo-500" />
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-line bg-canvas-soft px-3 py-2.5">
+                <div className="flex items-center gap-2 text-[12px] text-ink-muted">
+                  <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-brand" />
                   任务执行中，完成后可继续迭代
                 </div>
-                <button
-                  onClick={stop}
-                  className="rounded-lg border border-neutral-200 bg-white px-2.5 py-1 text-[11px] font-medium text-neutral-600 hover:bg-neutral-100"
-                >
+                <button onClick={stop} className="btn btn-ghost btn-pill btn-sm">
                   停止
                 </button>
               </div>
@@ -945,10 +934,10 @@ export default function Workspace({ user }: Props) {
                   rows={2}
                   maxLength={400}
                   placeholder="描述要改的地方，例如：主色改成绿色，底部增加一个统计栏"
-                  className="w-full resize-none rounded-xl border border-neutral-200 px-3 py-2.5 text-[12px] leading-5 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                  className="field resize-none text-[12px] leading-5"
                 />
                 <div className="mt-2 flex items-center justify-between">
-                  <span className="min-w-0 truncate text-[10px] text-neutral-400">
+                  <span className="min-w-0 truncate text-[10px] text-ink-faint">
                     {pickedTarget
                       ? `已点选 ${pickedTarget.tag}「${pickedTarget.text || pickedTarget.selector}」`
                       : '修改会生成新版本，失败不覆盖当前版本'}
@@ -957,7 +946,7 @@ export default function Workspace({ user }: Props) {
                     {pickedTarget && (
                       <button
                         onClick={() => setPickedTarget(null)}
-                        className="rounded-md border border-neutral-200 px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-50"
+                        className="btn btn-quiet btn-pill btn-sm h-7 px-2 text-[10px]"
                       >
                         取消点选
                       </button>
@@ -965,7 +954,7 @@ export default function Workspace({ user }: Props) {
                     <button
                       onClick={() => send()}
                       disabled={input.trim().length < 2}
-                      className="rounded-lg bg-indigo-600 px-3.5 py-1.5 text-[12px] font-semibold text-white hover:bg-indigo-700 disabled:bg-neutral-300"
+                      className="btn btn-primary btn-pill btn-sm"
                     >
                       发送
                     </button>
@@ -978,56 +967,44 @@ export default function Workspace({ user }: Props) {
 
         {/* 右侧预览 */}
         <main className={`${mobilePane === 'preview' ? 'flex' : 'hidden'} min-h-0 min-w-0 flex-1 flex-col md:flex`}>
-          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-neutral-200 bg-white px-3 py-2">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line bg-white px-3 py-2">
             <div className="flex items-center gap-1.5">
               <button
                 onClick={() => setChatRailOpen(true)}
-                className="hidden rounded-lg border border-neutral-200 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-50 md:block xl:hidden"
+                className="btn btn-ghost btn-pill btn-sm hidden md:inline-flex xl:hidden"
               >
                 对话 / 报告
               </button>
-              <div className="flex items-center gap-1 rounded-lg bg-neutral-100 p-0.5">
+              <div className="seg">
                 {(['desktop', 'mobile'] as const).map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => setDevice(d)}
-                    className={`rounded-md px-2.5 py-1 text-[11px] transition ${
-                      device === d ? 'bg-white text-neutral-800 shadow-sm' : 'text-neutral-500'
-                    }`}
-                  >
+                  <button key={d} onClick={() => setDevice(d)} data-active={device === d}>
                     {d === 'desktop' ? '桌面' : '手机'}
                   </button>
                 ))}
               </div>
             </div>
             <div className="flex items-center gap-1.5">
-              {pickMode && <span className="text-[10px] text-indigo-600">点选模式：点击页面元素</span>}
+              {pickMode && <span className="text-[10px] text-brand">点选模式：点击页面元素</span>}
               <button
                 onClick={() => {
                   setPickMode(true)
                   sandboxRef.current?.startPick()
                   setTimeout(() => setPickMode(false), 8000)
                 }}
-                className="rounded-lg border border-neutral-200 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-50"
+                className="btn btn-ghost btn-pill btn-sm hidden sm:inline-flex"
                 title="点选元素（P1 将用于局部修改）"
               >
                 点选
               </button>
               <button
                 onClick={() => sandboxRef.current?.reload()}
-                className="rounded-lg border border-neutral-200 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-50"
+                className="btn btn-ghost btn-pill btn-sm"
               >
                 刷新
               </button>
-              <div className="flex items-center gap-0.5 rounded-lg bg-neutral-100 p-0.5">
+              <div className="seg">
                 {(['preview', 'console', 'code'] as const).map((t) => (
-                  <button
-                    key={t}
-                    onClick={() => setTab(t)}
-                    className={`rounded-md px-2.5 py-1 text-[11px] transition ${
-                      tab === t ? 'bg-white text-neutral-800 shadow-sm' : 'text-neutral-500'
-                    }`}
-                  >
+                  <button key={t} onClick={() => setTab(t)} data-active={tab === t}>
                     {t === 'preview' ? '预览' : t === 'console' ? 'Console' : '代码'}
                   </button>
                 ))}
@@ -1035,9 +1012,9 @@ export default function Workspace({ user }: Props) {
             </div>
           </div>
 
-          <div className="scrollbar-thin relative min-h-0 flex-1 overflow-auto bg-neutral-100 p-3 sm:p-5">
+          <div className="scrollbar-thin relative min-h-0 flex-1 overflow-auto bg-canvas p-3 sm:p-5">
             <div
-              className={`mx-auto flex h-full flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm transition-all ${
+              className={`mx-auto flex h-full flex-col overflow-hidden rounded-xl border border-line bg-white transition-all ${
                 device === 'mobile' ? 'max-w-[390px]' : 'max-w-full'
               } ${tab === 'preview' ? '' : 'hidden'}`}
             >
@@ -1066,26 +1043,26 @@ export default function Workspace({ user }: Props) {
               ) : (
                 <div className="grid h-full place-items-center px-6 text-center">
                   <div>
-                    <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-neutral-200 border-t-indigo-500" />
-                    <p className="mt-4 text-[13px] font-medium text-neutral-700">正在生成第一个版本…</p>
-                    <p className="mt-1 text-[11px] text-neutral-400">左侧可以看到规划、生成与验收的完整过程</p>
+                    <div className="mx-auto spinner" />
+                    <p className="mt-4 text-[13px] font-medium text-ink-soft">正在生成第一个版本…</p>
+                    <p className="mt-1 text-[11px] text-ink-muted">左侧可以看到规划、生成与验收的完整过程</p>
                   </div>
                 </div>
               )}
             </div>
 
             {tab === 'console' && (
-              <div className="mx-auto h-full max-w-full overflow-auto rounded-xl border border-neutral-200 bg-white p-3 font-mono text-[11px]">
+              <div className="mx-auto h-full max-w-full overflow-auto rounded-xl border border-line bg-white p-3 font-mono-ui text-[11px]">
                 {consoleEntries.length === 0 ? (
-                  <div className="p-4 text-center font-sans text-[12px] text-neutral-400">暂无日志</div>
+                  <div className="p-4 text-center font-sans text-[12px] text-ink-muted">暂无日志</div>
                 ) : (
                   consoleEntries.map((e) => (
-                    <div key={e.id} className="flex gap-2 border-b border-neutral-100 py-1 last:border-0">
-                      <span className="shrink-0 text-neutral-400">{e.at}</span>
-                      <span className={e.level === 'error' ? 'text-red-500' : e.level === 'warn' ? 'text-amber-600' : 'text-emerald-600'}>
+                    <div key={e.id} className="flex gap-2 border-b border-line py-1 last:border-0">
+                      <span className="shrink-0 text-ink-faint">{e.at}</span>
+                      <span className={e.level === 'error' ? 'text-bad' : e.level === 'warn' ? 'text-warn' : 'text-ok'}>
                         {e.level === 'error' ? 'ERR' : e.level === 'warn' ? 'WARN' : 'INFO'}
                       </span>
-                      <span className="min-w-0 break-all text-neutral-600">{e.text}</span>
+                      <span className="min-w-0 break-all text-ink-soft">{e.text}</span>
                     </div>
                   ))
                 )}
@@ -1093,27 +1070,27 @@ export default function Workspace({ user }: Props) {
             )}
 
             {tab === 'code' && (
-              <div className="mx-auto flex h-full max-w-full flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white">
-                <div className="flex items-center justify-between border-b border-neutral-200 px-3 py-1.5">
-                  <span className="text-[10px] text-neutral-400">单文件 HTML · {project.html.length} 字符</span>
+              <div className="mx-auto flex h-full max-w-full flex-col overflow-hidden rounded-xl border border-line bg-white">
+                <div className="flex items-center justify-between border-b border-line px-3 py-2">
+                  <span className="font-mono-ui text-[10px] text-ink-muted">单文件 HTML · {project.html.length} 字符</span>
                   <div className="flex gap-1.5">
                     <button
                       onClick={() => {
                         navigator.clipboard.writeText(project.html).then(() => showToast('代码已复制')).catch(() => {})
                       }}
-                      className="rounded border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-600 hover:bg-neutral-50"
+                      className="btn btn-ghost btn-pill btn-sm h-7 px-2 text-[10px]"
                     >
                       复制
                     </button>
                     <button
                       onClick={() => downloadHtml(project.html, `${project.title}.html`)}
-                      className="rounded border border-neutral-200 px-2 py-0.5 text-[10px] text-neutral-600 hover:bg-neutral-50"
+                      className="btn btn-ghost btn-pill btn-sm h-7 px-2 text-[10px]"
                     >
                       下载
                     </button>
                   </div>
                 </div>
-                <pre className="scrollbar-thin min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all p-3 text-[11px] leading-5 text-neutral-700">
+                <pre className="scrollbar-thin min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all p-3 text-[11px] leading-5 text-ink-soft">
                   {project.html || '当前版本暂无代码'}
                 </pre>
               </div>
@@ -1124,48 +1101,48 @@ export default function Workspace({ user }: Props) {
 
       {/* 版本抽屉 */}
       {versionsOpen && (
-        <div className="fixed inset-0 z-40 flex justify-end bg-neutral-900/30" onClick={() => setVersionsOpen(false)}>
+        <div className="fixed inset-0 z-40 flex justify-end bg-ink/25" onClick={() => setVersionsOpen(false)}>
           <div
-            className="flex h-full w-full max-w-[380px] flex-col bg-white shadow-xl"
+            className="flex h-full w-full max-w-[380px] flex-col bg-white shadow-[0_24px_60px_-24px_rgba(12,12,12,0.35)]"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
+            <div className="flex items-center justify-between border-b border-line px-4 py-3.5">
               <div>
-                <h2 className="text-[14px] font-semibold text-neutral-900">版本历史</h2>
-                <p className="mt-0.5 text-[10px] text-neutral-400">每个版本都是完整快照，可随时恢复</p>
+                <h2 className="text-[14px] font-semibold text-ink">版本历史</h2>
+                <p className="mt-0.5 text-[10px] text-ink-muted">每个版本都是完整快照，可随时恢复</p>
               </div>
-              <button onClick={() => setVersionsOpen(false)} className="text-neutral-400 hover:text-neutral-700">
+              <button onClick={() => setVersionsOpen(false)} className="grid h-8 w-8 place-items-center rounded-full text-ink-muted transition hover:bg-canvas hover:text-ink">
                 ✕
               </button>
             </div>
             <div className="scrollbar-thin flex-1 overflow-y-auto p-3">
               {project.versions.length === 0 && (
-                <div className="py-10 text-center text-[12px] text-neutral-400">暂无版本</div>
+                <div className="py-10 text-center text-[12px] text-ink-muted">暂无版本</div>
               )}
               <div className="space-y-2">
                 {project.versions.map((v) => {
                   const current = v.id === project.currentVersionId
                   const published = v.id === project.publishedVersionId
                   return (
-                    <div key={v.id} className="rounded-xl border border-neutral-200 p-3">
+                    <div key={v.id} className="rounded-xl border border-line p-3">
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
-                          <span className="text-[13px] font-semibold text-neutral-900">v{v.seq}</span>
-                          {current && <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[9px] font-medium text-indigo-600">当前</span>}
-                          {published && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">已发布</span>}
+                          <span className="font-mono-ui text-[13px] font-semibold text-ink">v{v.seq}</span>
+                          {current && <span className="rounded-full bg-brand-soft px-2 py-0.5 text-[9px] font-medium text-brand">当前</span>}
+                          {published && <span className="rounded-full bg-ok-soft px-2 py-0.5 text-[9px] font-medium text-ok">已发布</span>}
                         </div>
                         <div className="flex items-center gap-2">
                           {v.score != null && <ScoreRing score={v.score} size={34} />}
                           <button
                             disabled={current}
                             onClick={() => restore(v.id)}
-                            className="rounded-lg border border-neutral-200 px-2 py-1 text-[10px] text-neutral-600 hover:bg-neutral-50 disabled:text-neutral-300"
+                            className="btn btn-ghost btn-pill btn-sm h-7 px-2.5 text-[10px]"
                           >
                             恢复
                           </button>
                         </div>
                       </div>
-                      <div className="mt-1.5 text-[10px] text-neutral-400">
+                      <div className="mt-1.5 font-mono-ui text-[10px] text-ink-faint">
                         {shortModel(v.model)} · {v.source} · {new Date(v.createdAt).toLocaleString('zh-CN', { hour12: false })}
                       </div>
                     </div>
@@ -1173,7 +1150,7 @@ export default function Workspace({ user }: Props) {
                 })}
               </div>
             </div>
-            <div className="border-t border-neutral-200 p-3 text-[10px] leading-4 text-neutral-400">
+            <div className="border-t border-line p-3 text-[10px] leading-4 text-ink-muted">
               提示：编辑失败时不会产生新版本，当前版本保持不变。
             </div>
           </div>
@@ -1182,38 +1159,34 @@ export default function Workspace({ user }: Props) {
 
       {/* 发布面板 */}
       {publishOpen && (
-        <div className="fixed inset-0 z-40 grid place-items-center bg-neutral-900/40 p-4" onClick={() => setPublishOpen(false)}>
-          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-start justify-between">
+        <div className="fixed inset-0 z-40 grid place-items-center bg-ink/30 p-4" onClick={() => setPublishOpen(false)}>
+          <div
+            className="w-full max-w-md rounded-[20px] border border-line bg-white p-5 shadow-[0_24px_60px_-24px_rgba(12,12,12,0.35)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-[16px] font-semibold text-neutral-900">{sharePath ? '已发布' : '发布应用'}</h2>
-                <p className="mt-1 text-[12px] text-neutral-500">
+                <h2 className="text-[16px] font-semibold text-ink">{sharePath ? '已发布' : '发布应用'}</h2>
+                <p className="mt-1 text-[12px] leading-5 text-ink-muted">
                   发布 = 固定当前版本为公开链接；后续更新可再次发布覆盖。
                 </p>
               </div>
-              <button onClick={() => setPublishOpen(false)} className="text-neutral-400 hover:text-neutral-700">
+              <button onClick={() => setPublishOpen(false)} className="grid h-8 w-8 place-items-center rounded-full text-ink-muted transition hover:bg-canvas hover:text-ink">
                 ✕
               </button>
             </div>
             {sharePath ? (
               <>
                 <div className="mt-4 flex gap-2">
-                  <input
-                    readOnly
-                    value={shareUrl}
-                    className="min-w-0 flex-1 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-[12px] text-neutral-700"
-                  />
-                  <button
-                    onClick={copyLink}
-                    className="shrink-0 rounded-lg bg-indigo-600 px-3 py-2 text-[12px] font-medium text-white hover:bg-indigo-700"
-                  >
+                  <input readOnly value={shareUrl} className="field min-w-0 flex-1 font-mono-ui text-[12px]" />
+                  <button onClick={copyLink} className="btn btn-primary btn-pill shrink-0">
                     复制
                   </button>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     onClick={() => window.open(sharePath, '_blank')}
-                    className="rounded-lg border border-neutral-200 px-3 py-1.5 text-[12px] text-neutral-600 hover:bg-neutral-50"
+                    className="btn btn-ghost btn-pill btn-sm"
                   >
                     打开链接
                   </button>
@@ -1222,15 +1195,15 @@ export default function Workspace({ user }: Props) {
                       setPublishOpen(false)
                       navigate(sharePath)
                     }}
-                    className="rounded-lg border border-neutral-200 px-3 py-1.5 text-[12px] text-neutral-600 hover:bg-neutral-50"
+                    className="btn btn-ghost btn-pill btn-sm"
                   >
                     预览访客视图
                   </button>
-                  <button onClick={unpublish} className="rounded-lg border border-red-200 px-3 py-1.5 text-[12px] text-red-600 hover:bg-red-50">
+                  <button onClick={unpublish} className="btn btn-pill btn-sm bg-bad-soft text-bad">
                     下线
                   </button>
                 </div>
-                <p className="mt-3 text-[11px] leading-5 text-neutral-400">
+                <p className="mt-3 text-[11px] leading-5 text-ink-muted">
                   访客数据按浏览器隔离保存，不会与你的编辑数据混用。
                 </p>
               </>
@@ -1238,7 +1211,7 @@ export default function Workspace({ user }: Props) {
               <button
                 onClick={publish}
                 disabled={!project.currentVersionId}
-                className="mt-4 w-full rounded-xl bg-indigo-600 py-2.5 text-[13px] font-semibold text-white hover:bg-indigo-700 disabled:bg-neutral-300"
+                className="btn btn-primary mt-4 h-11 w-full"
               >
                 发布当前版本 v{project.versions[0]?.seq ?? 1}
               </button>
@@ -1248,7 +1221,7 @@ export default function Workspace({ user }: Props) {
       )}
 
       {toast && (
-        <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-full bg-neutral-900 px-4 py-2 text-[12px] text-white shadow-lg">
+        <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-full bg-ink px-4 py-2 text-[12px] text-white shadow-[0_12px_30px_-16px_rgba(12,12,12,0.5)]">
           {toast}
         </div>
       )}

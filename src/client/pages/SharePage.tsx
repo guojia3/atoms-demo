@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import Sandbox from '../components/Sandbox'
+import { BrandMark } from '../components/Header'
 import { api, downloadHtml } from '../api'
 import type { User } from '../types'
 
@@ -29,6 +30,14 @@ interface Props {
   onLogout: () => void
 }
 
+function DownloadIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M10 3v9m0 0 3.2-3.2M10 12 6.8 8.8M4 14.5V16h12v-1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 export default function SharePage({ user }: Props) {
   const { slug = '' } = useParams()
   const [data, setData] = useState<ShareData | null>(null)
@@ -55,62 +64,108 @@ export default function SharePage({ user }: Props) {
   }, [slug])
 
   return (
-    <div className="flex min-h-screen flex-col bg-neutral-100">
-      <header className="flex min-h-14 items-center justify-between gap-3 border-b border-neutral-200 bg-white px-4 py-1.5 sm:px-6">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <Link to="/" className="flex shrink-0 items-center gap-2">
-            <span className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-[13px] font-bold text-white">
-              A
-            </span>
-            <span className="hidden text-[13px] font-semibold text-neutral-800 sm:inline">Atoms Demo</span>
+    <div className="flex min-h-screen flex-col bg-canvas">
+      <header className="sticky top-0 z-40 border-b border-line bg-white/85 backdrop-blur-xl">
+        <div className="mx-auto flex h-16 max-w-[1200px] items-center justify-between gap-3 px-4 sm:px-6">
+          <Link to="/" className="flex min-w-0 items-center gap-2.5 text-ink">
+            <BrandMark size={24} />
+            <span className="hidden text-[15px] font-semibold tracking-tight sm:inline">Atoms Demo</span>
+            <span className="rounded-full border border-line px-2 py-0.5 text-[10px] text-ink-muted">分享</span>
           </Link>
-          <span className="h-4 w-px shrink-0 bg-neutral-200" />
-          <div className="min-w-0">
-            <div className="truncate text-[14px] font-semibold text-neutral-900">{data?.title || '加载中…'}</div>
-            <div className="truncate text-[11px] text-neutral-400">
-              {data ? `v${data.seq} · ${data.score ?? '—'} 分 · ${sourceLabel(data)}` : slug}
-            </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {data && (
+              <button
+                onClick={() => downloadHtml(data.html, `${data.title || 'atoms-app'}.html`)}
+                className="btn btn-ghost btn-pill btn-sm"
+                title="导出单文件 HTML"
+              >
+                <DownloadIcon />
+                <span className="hidden sm:inline">导出 HTML</span>
+              </button>
+            )}
+            <Link to="/" className="btn btn-primary btn-pill btn-sm">
+              用 Atoms Demo 做一个
+            </Link>
           </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {data && (
-            <button
-              onClick={() => downloadHtml(data.html, `${data.title || 'atoms-app'}.html`)}
-              className="rounded-lg border border-neutral-200 px-3 py-1.5 text-[12px] font-medium text-neutral-600 hover:bg-neutral-50"
-            >
-              导出 HTML
-            </button>
-          )}
-          <Link
-            to="/"
-            className="rounded-lg bg-indigo-600 px-3.5 py-1.5 text-[12px] font-semibold text-white hover:bg-indigo-700"
-          >
-            用 Atoms Demo 做一个
-          </Link>
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-3 py-4 sm:px-6 sm:py-5">
+      <main className="mx-auto w-full max-w-[1200px] flex-1 px-3 pb-10 pt-6 sm:px-6 sm:pt-8">
         {error ? (
-          <div className="mx-auto mt-20 max-w-md rounded-2xl border border-neutral-200 bg-white p-8 text-center">
-            <h1 className="text-[18px] font-semibold text-neutral-900">链接不可用</h1>
-            <p className="mt-2 text-[13px] leading-6 text-neutral-500">{error}。可能已被作者下线。</p>
-            <Link to="/" className="mt-5 inline-block rounded-xl bg-indigo-600 px-4 py-2 text-[13px] font-medium text-white">
+          <div className="mx-auto mt-20 max-w-md rounded-2xl border border-line bg-white p-8 text-center">
+            <div className="mx-auto mb-4 grid h-10 w-10 place-items-center rounded-full bg-canvas text-[16px] text-ink-muted">!</div>
+            <h1 className="text-[18px] font-semibold text-ink">链接不可用</h1>
+            <p className="mt-2 text-[13px] leading-6 text-ink-muted">{error}。可能已被作者下线。</p>
+            <Link to="/" className="btn btn-primary mt-5">
               返回首页
             </Link>
           </div>
         ) : !data || kv === null ? (
-          <div className="grid flex-1 place-items-center text-[13px] text-neutral-400">正在加载应用…</div>
+          <div className="grid flex-1 place-items-center py-24">
+            <div className="w-full max-w-[720px]">
+              <div className="skeleton mx-auto h-7 w-52" />
+              <div className="skeleton mx-auto mt-3 h-4 w-72" />
+              <div className="skeleton mt-8 h-[320px] w-full rounded-2xl" />
+              <p className="mt-4 text-center text-[12px] text-ink-muted">正在加载应用…</p>
+            </div>
+          </div>
         ) : (
           <>
-            <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_18px_50px_-30px_rgba(24,24,27,0.35)]">
-              <div className="flex items-center gap-2 border-b border-neutral-100 bg-neutral-50/80 px-4 py-2">
-                <span className="flex gap-1.5">
-                  <i className="h-2.5 w-2.5 rounded-full bg-red-400/70" />
-                  <i className="h-2.5 w-2.5 rounded-full bg-amber-400/70" />
-                  <i className="h-2.5 w-2.5 rounded-full bg-emerald-400/70" />
+            <div className="flex flex-wrap items-center gap-1.5 text-[12px] text-ink-muted">
+              <Link to="/" className="transition hover:text-ink">
+                首页
+              </Link>
+              <span className="text-ink-faint">/</span>
+              <span>分享</span>
+              <span className="text-ink-faint">/</span>
+              <span className="max-w-[220px] truncate text-ink">{data.title}</span>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h1 className="text-[26px] leading-[1.25] font-semibold tracking-tight text-ink sm:text-[32px]">
+                  {data.title || '未命名应用'}
+                </h1>
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-ink-muted">
+                  <span>v{data.seq}</span>
+                  <span className="text-ink-faint">·</span>
+                  <span>{data.score ?? '—'} 分</span>
+                  <span className="text-ink-faint">·</span>
+                  <span className="rounded-full bg-brand-soft px-2 py-0.5 text-[11px] font-medium text-brand">
+                    {sourceLabel(data)}
+                  </span>
+                  <span className="hidden sm:inline">· 数据自动保存</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => downloadHtml(data.html, `${data.title || 'atoms-app'}.html`)}
+                  className="grid h-9 w-9 place-items-center rounded-full border border-line-strong bg-white text-ink-muted transition hover:text-ink"
+                  title="导出 HTML"
+                >
+                  <DownloadIcon />
+                </button>
+                <Link
+                  to="/"
+                  className="grid h-9 w-9 place-items-center rounded-full border border-line-strong bg-white text-ink-muted transition hover:text-ink"
+                  title="返回首页"
+                >
+                  <span aria-hidden="true">↗</span>
+                </Link>
+                <Link to="/" className="btn btn-primary btn-pill h-9">
+                  做一个同款
+                </Link>
+              </div>
+            </div>
+
+            <div className="mt-6 overflow-hidden rounded-2xl border border-line bg-white">
+              <div className="flex flex-wrap items-center gap-2 border-b border-line bg-white px-4 py-2.5">
+                <span className="flex gap-1.5" aria-hidden="true">
+                  <i className="h-2.5 w-2.5 rounded-full bg-black/10" />
+                  <i className="h-2.5 w-2.5 rounded-full bg-black/10" />
+                  <i className="h-2.5 w-2.5 rounded-full bg-black/10" />
                 </span>
-                <span className="ml-2 truncate rounded-md bg-white px-2.5 py-1 text-[11px] text-neutral-400 ring-1 ring-neutral-200">
+                <span className="ml-1 max-w-full truncate rounded-md bg-canvas px-2.5 py-1 text-[11px] text-ink-muted">
                   {sourceLabel(data)} · 数据自动保存
                 </span>
               </div>
@@ -123,12 +178,19 @@ export default function SharePage({ user }: Props) {
                 autoHeight
               />
             </div>
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-neutral-400">
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-ink-muted">
               <span>你的操作会自动保存（按访客独立存储），作者更新版本后会切换到最新发布版。</span>
               <span className="flex items-center gap-2">
-                {user?.kind === 'guest' && <Link to="/login" className="text-indigo-600 hover:underline">登录</Link>}
-                <span>·</span>
-                <Link to="/" className="text-indigo-600 hover:underline">我也要做一个</Link>
+                {user?.kind === 'guest' && (
+                  <Link to="/login" className="text-brand hover:underline">
+                    登录
+                  </Link>
+                )}
+                <span className="text-ink-faint">·</span>
+                <Link to="/" className="text-brand hover:underline">
+                  我也要做一个
+                </Link>
               </span>
             </div>
           </>

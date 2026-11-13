@@ -39,7 +39,7 @@ export default function App() {
       <Route path="/" element={<><Header {...common} /><Home user={user} config={config} /></>} />
       <Route path="/p/:id" element={<Workspace user={user} />} />
       <Route path="/s/:slug" element={<SharePage user={user} onLogout={common.onLogout} />} />
-      <Route path="/login" element={<><Header {...common} /><Login onDone={refreshUser} /></>} />
+      <Route path="/login" element={<Login onDone={refreshUser} />} />
       <Route path="*" element={<><Header {...common} /><Home user={user} config={config} /></>} />
     </Routes>
   )
