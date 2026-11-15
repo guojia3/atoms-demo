@@ -48,6 +48,13 @@ MOCK_MODE=1 PORT=3400 DATABASE_PATH=/tmp/atoms-mobile-bugs.db NODE_ENV=productio
 QA_BASE=http://127.0.0.1:3400 node test/mobile-bugs-check.mjs            # 截图输出 test/results/bug2048-*.png
 ```
 
+赛马策略与兜底回归（自带 fake-llm 与应用实例，覆盖首候选预览、45/90s、替换、KV 隔离、二维码兜底）：
+
+```bash
+node test/race-strategy-check.mjs
+RACE_TEST_GRACE=45000 RACE_TEST_SLOW=60000 RACE_TEST_ONLY=1 node test/race-strategy-check.mjs  # 字面 45s 上限
+```
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
@@ -56,6 +63,8 @@ QA_BASE=http://127.0.0.1:3400 node test/mobile-bugs-check.mjs            # 截�
 | `DATABASE_PATH` | `./data/atoms.db` | SQLite 路径，生产建议 `/data/atoms.db` |
 | `MOCK_MODE` | 0 | `1` 强制演示模式 |
 | `RACE_COUNT` | 2 | 候选路数：2 = 双路赛马，1 = 单路 |
+| `RACE_GRACE_MS` | 45000 | 首候选就绪后等待其余候选的上限；到期取消慢候选 |
+| `RACE_LOW_SCORE_GRACE_MS` | 90000 | 首候选得分低于 70 时自动放宽的等待上限 |
 | `PROBE_TIMEOUT_MS` | 15000 | 浏览器实测等待上限（按候选数累加） |
 | `BODY_LIMIT` | 1mb | JSON 请求体上限，超出返回 413 |
 | `GENERATION_RATE_LIMIT` | 20 | 每用户每小时生成次数（创建/编辑/修复/重试都计入），超限 429 + `Retry-After` |
@@ -89,6 +98,9 @@ LLM_PROVIDERS=[{"name":"deepseek","baseUrl":"https://api.deepseek.com/v1","apiKe
 - **点选编辑**：沙箱内点选元素后，把 selector、标签、文本与 HTML 片段作为上下文随修改要求提交。
 - **一键修复**：验收未通过时，将失败项 + Console 报错整理成 fix 指令，一键发起修复迭代。
 - **断线恢复**：SSE 运行事件带单调序号，内存缓冲 400 条，支持 `from` 回放；进程重启把 running 标记为 interrupted。
+- **性能**：启动时对 JS/CSS/HTML 预生成 brotli + gzip（br 优先、gzip 回退），静态资源体积约 −73%~−82%；SSE 保持不压缩/不缓冲；探针管道候选 HTML/KV 并行拉取、隐藏沙箱共用稳定期、探针串行。
+- **首候选预览（策略 A）**：首个候选通过静态检查后立即预览并标注“候选预览”；其余候选最多等 45s（首候选 <70 分自动放宽到 90s），到期真正 abort 慢请求；择优来源优先级 `model > mock > fallback`，早期交互只在胜者为该候选时合并到正式 KV。
+- **兜底一致性**：真实模型失败时只有明确命中 6 类内置模板才允许兜底，并标注“演示兜底”；二维码等未匹配需求不会被默认看板冒充，直接失败并提示重试。
 - **界面设计**：参考 atoms.dev 官方产品的设计语言、原创实现——纸灰画布（`#f6f6f6`）+ 纯白表面 + 1px 描边 + 单一钴蓝强调（`#4267ff`）+ 胶囊控件 + 系统字体栈（IBM Plex Sans / SF Pro / PingFang），token 定义在 [src/client/styles.css](src/client/styles.css)，桌面/平板/手机三档响应式。
 
 ## 评分模型（100 分）
