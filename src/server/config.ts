@@ -68,6 +68,9 @@ export const config = {
   raceGraceMs: Math.max(500, Number(process.env.RACE_GRACE_MS || 45000)),
   /** 首候选得分低于 70 时自动放宽的等待上限 */
   raceLowScoreGraceMs: Math.max(500, Number(process.env.RACE_LOW_SCORE_GRACE_MS || 90000)),
+  /** 产品内 QA 阶段：总开关与等待上限（仅浏览器 UI 连接时执行） */
+  qaEnabled: process.env.QA_ENABLED !== '0',
+  qaTimeoutMs: Math.max(2000, Number(process.env.QA_TIMEOUT_MS || 25000)),
   gitCommit: process.env.GIT_COMMIT || '',
   isProd: process.env.NODE_ENV === 'production',
   rootDir: process.cwd(),

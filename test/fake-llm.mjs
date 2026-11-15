@@ -160,6 +160,52 @@ setTimeout(function(){ throw new Error('low-c'); }, 20);
 </body>
 </html>`
 
+// QA 阶段失败样例：静态检查可通过（能正常参与赛马），但“添加”按钮没有实现，QA 主流程必然失败。
+const BROKEN_HTML = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>待修复记录工具</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;background:#f7f7fb;color:#1f2333;padding:24px}
+  .wrap{max-width:640px;margin:0 auto}
+  h1{font-size:24px;margin-bottom:8px}
+  .sub{color:#6b7280;font-size:13px;margin-bottom:16px}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:16px}
+  .bar{display:flex;gap:10px}
+  input{flex:1;border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;font-size:14px}
+  button{border:0;background:#4f46e5;color:#fff;border-radius:10px;padding:10px 16px;font-size:14px;font-weight:600}
+  ul{list-style:none;margin-top:12px;min-height:60px;color:#9ca3af;font-size:13px}
+  footer{margin-top:16px;color:#9ca3af;font-size:12px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>记录工具</h1>
+  <div class="sub">这是一个需要修复的页面：点击“添加”目前不会产生任何记录。</div>
+  <div class="card">
+    <div class="bar">
+      <input id="qa-input" placeholder="输入一条记录">
+      <button id="qa-add">添加</button>
+    </div>
+    <ul id="qa-list"><li style="color:#9ca3af">暂无记录</li></ul>
+  </div>
+  <p style="margin-top:12px;color:#9ca3af;font-size:12px;line-height:1.8">${'这是一个需要修复的示例页面，用来说明 QA 失败与修复流程。'.repeat(40)}</p>
+  <footer>Atoms QA 假模型 · 故意实现不完整的验收样例</footer>
+</div>
+<script>
+(function(){
+  document.getElementById('qa-add').addEventListener('click', function(){
+    // 故意不实现添加逻辑，用于验证 QA 失败与一键修复
+  });
+})();
+</script>
+</body>
+</html>`
+
+
 const stats = {
   engineerStarted: 0,
   engineerCompleted: 0,
@@ -316,6 +362,16 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
+  // QA 阶段：首次生成故意给出不完整页面，修复轮返回完整页面
+  if (role === 'engineer' && text.includes('QABROKENALWAYS')) {
+    await streamText(res, BROKEN_HTML, { gap: 10 })
+    return
+  }
+  if (role === 'engineer' && text.includes('QABROKEN')) {
+    const isFix = /修改要求|请修复以下问题/.test(text)
+    await streamText(res, isFix ? QA_HTML : BROKEN_HTML, { gap: 10 })
+    return
+  }
   // 402：工程师请求直接失败（规划仍成功），用于验证创作兜底
   if (role === 'engineer' && text.includes('HTTP402')) {
     json(res, 402, { error: { message: 'Payment Required（QA 注入）' } })

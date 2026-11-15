@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react'
 import { SANDBOX_RUNTIME } from '../../shared/runtime'
+import { chooseQaCases, buildRetestPlan, type QaCaseKind, type QaFeatures, type QaReport } from '../../shared/qa'
 import { api } from '../api'
 import type { ProbeMetrics } from '../types'
 
@@ -15,6 +16,16 @@ export interface SandboxHandle {
   probe: () => Promise<ProbeMetrics | null>
   reload: () => void
   startPick: () => void
+  runQa: (mode?: 'full' | 'retest' | 'persistence', focus?: QaCaseKind[]) => Promise<QaReport | null>
+}
+
+interface QaProgress {
+  index: number
+  total: number
+  passed: number
+  failed: number
+  title: string
+  status: 'passed' | 'failed'
 }
 
 interface Props {
@@ -29,6 +40,8 @@ interface Props {
   syncKv?: boolean
   /** 关闭同步时，把写入批次交给宿主缓存（用于候选预览定稿后合并） */
   onKvOps?: (ops: Array<{ op: string; key: string; value?: string }>) => void
+  /** QA 每条用例执行后的进度（仅当前活动的隐藏 QA 沙箱） */
+  onQaProgress?: (p: QaProgress) => void
 }
 
 const CSP = [
@@ -59,7 +72,7 @@ function buildSrcDoc(html: string, initData: Record<string, string>, runtime: st
 }
 
 const Sandbox = forwardRef<SandboxHandle, Props>(function Sandbox(
-  { html, initData, scope, onConsole, onPick, autoHeight = false, syncKv = true, onKvOps },
+  { html, initData, scope, onConsole, onPick, autoHeight = false, syncKv = true, onKvOps, onQaProgress },
   ref,
 ) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -69,6 +82,16 @@ const Sandbox = forwardRef<SandboxHandle, Props>(function Sandbox(
     resolve: (m: ProbeMetrics | null) => void
     timer: ReturnType<typeof setTimeout>
   } | null>(null)
+  const qaRef = useRef<{
+    id: string
+    resolve: (report: QaReport | null) => void
+    timer: ReturnType<typeof setTimeout>
+  } | null>(null)
+  const qaModeRef = useRef<'full' | 'retest' | 'persistence'>('full')
+  const qaFocusRef = useRef<QaCaseKind[]>([])
+  const readyRef = useRef(false)
+  const qaProgressRef = useRef(onQaProgress)
+  qaProgressRef.current = onQaProgress
   const consoleRef = useRef(onConsole)
   const pickRef = useRef(onPick)
   consoleRef.current = onConsole
@@ -98,6 +121,11 @@ const Sandbox = forwardRef<SandboxHandle, Props>(function Sandbox(
     () => reloadDoc ?? buildSrcDoc(html, initData, SANDBOX_RUNTIME),
     [html, initData, reloadDoc],
   )
+
+  useEffect(() => {
+    // srcDoc 变化（含 QA 刷新验证的 initData 变化）意味着文档重载，运行时需要重新上报 ready
+    readyRef.current = false
+  }, [srcDoc])
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -139,11 +167,69 @@ const Sandbox = forwardRef<SandboxHandle, Props>(function Sandbox(
         }
         return
       }
+      if (data.type === 'atoms-qa-inventory') {
+        const pending = qaRef.current
+        if (pending && pending.id === data.id) {
+          const features = data.features as QaFeatures
+          const cases =
+            qaModeRef.current === 'retest'
+              ? buildRetestPlan(qaFocusRef.current)
+              : qaModeRef.current === 'persistence'
+                ? [
+                    {
+                      kind: 'persistence' as const,
+                      title: '刷新后数据仍在',
+                      reload: true,
+                      expectItems: Number(features?.itemCount || 0) > 0 || Boolean(features?.listLike),
+                    },
+                  ]
+                : chooseQaCases(features)
+          iframe.contentWindow?.postMessage({ type: 'atoms-qa-plan', id: data.id, cases }, '*')
+        }
+        return
+      }
+      if (data.type === 'atoms-qa-wait') {
+        // QA 沙箱离屏渲染，iframe 内 setTimeout 会被钳制到 1s；由可见的父页面计时后回传
+        const ms = Math.max(0, Math.min(2000, Number(data.ms) || 0))
+        const id = String(data.id || '')
+        setTimeout(() => iframe.contentWindow?.postMessage({ type: 'atoms-qa-tick', id }, '*'), ms)
+        return
+      }
+      if (data.type === 'atoms-qa-progress') {
+        qaProgressRef.current?.({
+          index: Number(data.index || 0),
+          total: Number(data.total || 0),
+          passed: Number(data.passed || 0),
+          failed: Number(data.failed || 0),
+          title: String(data.title || ''),
+          status: data.status === 'failed' ? 'failed' : 'passed',
+        })
+        return
+      }
+      if (data.type === 'atoms-qa-result') {
+        const pending = qaRef.current
+        if (pending && pending.id === data.id) {
+          clearTimeout(pending.timer)
+          qaRef.current = null
+          const cases = Array.isArray(data.cases) ? data.cases : []
+          pending.resolve({
+            status: cases.some((c: { status: string }) => c.status === 'failed') ? 'failed' : 'passed',
+            cases,
+            total: cases.length,
+            passed: cases.filter((c: { status: string }) => c.status === 'passed').length,
+            failed: cases.filter((c: { status: string }) => c.status === 'failed').length,
+            durationMs: Number(data.durationMs || 0),
+            width: Number(data.width || 0),
+          })
+        }
+        return
+      }
       if (data.type === 'atoms-picked') {
         pickRef.current?.({ selector: data.selector, tag: data.tag, text: data.text })
         return
       }
       if (data.type === 'atoms-ready') {
+        readyRef.current = true
         consoleRef.current?.('info', `沙箱运行时就绪${data.title ? `：${data.title}` : ''}`)
       }
     }
@@ -189,6 +275,46 @@ const Sandbox = forwardRef<SandboxHandle, Props>(function Sandbox(
     startPick: () => {
       iframeRef.current?.contentWindow?.postMessage({ type: 'atoms-pick-start' }, '*')
     },
+    runQa: (mode: 'full' | 'retest' | 'persistence' = 'full', focus: QaCaseKind[] = []) =>
+      new Promise<QaReport | null>((resolve) => {
+        const iframe = iframeRef.current
+        if (!iframe?.contentWindow) {
+          resolve(null)
+          return
+        }
+        if (qaRef.current) {
+          clearTimeout(qaRef.current.timer)
+          qaRef.current.resolve(null)
+          qaRef.current = null
+        }
+        const id = Math.random().toString(36).slice(2)
+        qaModeRef.current = mode
+        qaFocusRef.current = focus
+        const timer = setTimeout(() => {
+          if (qaRef.current?.id === id) {
+            qaRef.current = null
+            resolve(null)
+          }
+        }, 20000)
+        qaRef.current = { id, resolve, timer }
+        // iframe 可能尚未完成运行时注入：等 ready 后再发起点，最多等 4s
+        const deadline = Date.now() + 4000
+        const start = () => {
+          if (qaRef.current?.id !== id) return
+          if (!readyRef.current) {
+            if (Date.now() >= deadline) {
+              clearTimeout(timer)
+              qaRef.current = null
+              resolve(null)
+              return
+            }
+            setTimeout(start, 120)
+            return
+          }
+          iframe.contentWindow?.postMessage({ type: 'atoms-qa-start', id }, '*')
+        }
+        start()
+      }),
   }))
 
   return (

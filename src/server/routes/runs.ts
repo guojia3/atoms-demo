@@ -1,7 +1,7 @@
 // 运行事件流（SSE）、候选结果页面、探针回报、停止任务
 import { Router, type Request } from 'express'
 import { eventsSince, lastSeq, subscribe } from '../jobs/hub.js'
-import { executeRun, resolveReport, stopRun } from '../jobs/runner.js'
+import { executeRun, noteUiClient, resolveQa, resolveReport, stopRun } from '../jobs/runner.js'
 import { getCandidate, getProject, getRun, updateRun } from '../store.js'
 import { serializeProject } from './projects.js'
 import { takeGenerationQuota } from '../auth.js'
@@ -34,6 +34,7 @@ router.get('/runs/:id/events', (req, res) => {
     return
   }
   const from = Number(req.query.from || 0)
+  if (req.query.ui === '1') noteUiClient(run.id)
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -135,6 +136,21 @@ router.post('/candidates/:id/report', (req, res) => {
     simulatedWrites: num(m.simulatedWrites, 1000),
   }
   const accepted = resolveReport(owned.candidate.id, metrics)
+  res.json({ ok: true, accepted })
+})
+
+router.post('/runs/:id/qa', (req, res) => {
+  const run = ownedRun(req, req.params.id)
+  if (!run) {
+    res.status(404).json({ error: '任务不存在' })
+    return
+  }
+  const result = req.body?.result
+  if (!result || !Array.isArray(result.cases)) {
+    res.status(400).json({ error: '缺少 QA 结果' })
+    return
+  }
+  const accepted = resolveQa(run.id, result)
   res.json({ ok: true, accepted })
 })
 

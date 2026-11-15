@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import Sandbox, { type SandboxHandle } from '../components/Sandbox'
+import { StageCompactBar, StageFullPanel } from '../components/StageProgress'
 import { BrandMark } from '../components/Header'
 import { api, downloadHtml } from '../api'
+import { isRepairLimitReached } from '../../shared/qa'
+import { deriveStageProgress } from '../../shared/stage-progress'
 import type {
   ConsoleEntry,
   Message,
@@ -16,12 +19,14 @@ import type {
 } from '../types'
 
 const PROBE_DELAY_MS = 1600
-const STEP_ORDER = ['plan', 'generate', 'verify', 'review', 'deliver'] as const
+const EMPTY_KV: Record<string, string> = {}
+const STEP_ORDER = ['plan', 'generate', 'verify', 'review', 'qa', 'deliver'] as const
 const STEP_DEFAULT: Record<string, string> = {
   plan: 'Mike 拆解需求',
   generate: 'Alex 生成页面',
   verify: '静态检查 + 浏览器实测',
   review: '逐条验收',
+  qa: 'QA 测试',
   deliver: '保存版本与结论',
 }
 
@@ -91,12 +96,20 @@ function PlanCard({ plan }: { plan: Plan }) {
 
 function ReportCard({ report, onFix }: { report: Report; onFix?: () => void }) {
   const [expanded, setExpanded] = useState(false)
-  const passed = report.score >= 70
+  const qaFailed = report.qa?.failed || 0
+  const repairLimitReached = isRepairLimitReached(report.qa)
+  const blocked = Boolean(report.blocked || report.qa?.blocked || repairLimitReached)
+  const passed = report.score >= 70 && qaFailed === 0 && !blocked
   const checklist = report.checklist || []
   const probe = report.probe || []
   const staticItems = report.static?.items || []
   const failedStatic = staticItems.filter((i) => !i.pass)
   const passCount = checklist.filter((i) => i.pass).length
+  // 一键修复只在 QA 失败且未达修复上限时出现；没有 QA 的旧报告保留原有判定
+  const canFix =
+    Boolean(onFix) &&
+    !blocked &&
+    (report.qa ? qaFailed > 0 : Boolean(report.needsFix || !passed || checklist.some((i) => !i.pass)))
 
   return (
     <div className="animate-fade-up overflow-hidden rounded-2xl border border-line bg-white">
@@ -113,17 +126,17 @@ function ReportCard({ report, onFix }: { report: Report; onFix?: () => void }) {
                 passed ? 'bg-ok-soft text-ok' : 'bg-warn-soft text-warn'
               }`}
             >
-              {passed ? '已通过' : '待修复'}
+              {blocked ? '修复上限' : passed ? '已通过' : '待修复'}
             </span>
           </div>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono-ui text-[10px] text-ink-muted">
             <span>静态 {report.parts.static}/10</span>
             <span>实测 {report.parts.probe}/50</span>
-            <span>清单 {report.parts.checklist}/40</span>
+            <span>验收 {report.parts.checklist}/40</span>
             <span>通过 {passCount}/{checklist.length}</span>
           </div>
         </div>
-        {onFix && (!passed || checklist.some((i) => !i.pass)) && (
+        {canFix && (
           <button onClick={onFix} className="btn btn-primary btn-pill btn-sm shrink-0">
             一键修复
           </button>
@@ -151,6 +164,49 @@ function ReportCard({ report, onFix }: { report: Report; onFix?: () => void }) {
         </div>
       )}
 
+      {report.qa && (
+        <div className="border-b border-line bg-white px-4 py-3">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-[12px] font-semibold text-ink">QA 测试结果</span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                report.qa.failed > 0 ? 'bg-bad-soft text-bad' : 'bg-ok-soft text-ok'
+              }`}
+            >
+              {report.qa.passed}/{report.qa.total} 通过
+            </span>
+            {report.qa.repairRounds != null && (
+              <span className="rounded-full bg-canvas px-2 py-0.5 text-[10px] text-ink-muted">
+                第 {report.qa.repairRounds}/{report.qa.maxRepairRounds ?? 2} 轮复测
+              </span>
+            )}
+            {Boolean(report.qa.retested?.length) && (
+              <span className="rounded-full bg-canvas px-2 py-0.5 text-[10px] text-ink-muted">
+                本轮复测 {report.qa.retested!.length} 条
+              </span>
+            )}
+            {report.qa.blocked && <span className="rounded-full bg-bad-soft px-2 py-0.5 text-[10px] text-bad">修复上限</span>}
+            <span className="text-[10px] text-ink-faint">耗时 {Math.round(report.qa.durationMs / 100) / 10}s</span>
+          </div>
+          <div className="space-y-1">
+            {report.qa.cases.map((item) => (
+              <div key={item.id} className="flex items-start gap-2 text-[11px] leading-5">
+                <span className={`mt-0.5 shrink-0 ${item.status === 'passed' ? 'text-ok' : 'text-bad'}`}>
+                  {item.status === 'passed' ? '✓' : '✕'}
+                </span>
+                <span className="min-w-0 flex-1 break-words text-ink-soft">
+                  {item.title}
+                  <span className="ml-1 text-ink-faint">{item.evidence}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="px-4 pt-3 text-[11px] font-medium text-ink-muted">
+        验收判定{report.acceptance ? '（仅含已实现且有 QA 证据的条目）' : ''}
+      </div>
       <div className="space-y-1.5 px-4 py-3">
         {checklist.map((item) => (
           <div key={item.id || item.text} className="flex items-start gap-2 text-[12px] leading-5">
@@ -343,12 +399,20 @@ export default function Workspace({ user }: Props) {
   const [previewHtml, setPreviewHtml] = useState('')
   // 第二候选在隐藏沙箱内同步装载，与可见候选共用同一个 1.6s 稳定期，探针仍串行执行
   const [probeHtml, setProbeHtml] = useState('')
+  // QA 在独立隐藏沙箱执行，不污染可见预览与正式 KV
+  const [qaHtml, setQaHtml] = useState('')
+  // QA 刷新持久化验证：把第一轮捕获的 KV 写入作为第二轮的初始数据
+  const [qaInitData, setQaInitData] = useState<Record<string, string>>(EMPTY_KV)
   // 首候选提前预览：定稿前交互先缓存，定稿后仅在胜者就是该候选时合并到正式 KV
   const [previewCandidate, setPreviewCandidate] = useState<{ id: string; model?: string } | null>(null)
   const [previewNotice, setPreviewNotice] = useState('')
   const [kvData, setKvData] = useState<Record<string, string>>({})
   const [pickedTarget, setPickedTarget] = useState<PickTarget | null>(null)
   const [runStatus, setRunStatus] = useState<'idle' | 'running' | 'done' | 'failed' | 'stopped'>('idle')
+  // 预览区六阶段进度：首候选 flag 必须按当前 run 重置，不能沿用上一次预览
+  const [runFirstCandidate, setRunFirstCandidate] = useState(false)
+  const [liveVersion, setLiveVersion] = useState<{ seq: number; score: number | null } | null>(null)
+  const [qaEnabled, setQaEnabled] = useState<boolean | null>(null)
   const [steps, setSteps] = useState<Record<string, StepState>>({})
   const [progress, setProgress] = useState<{ chars: number; tail: string } | null>(null)
   const [liveReport, setLiveReport] = useState<Report | null>(null)
@@ -371,6 +435,13 @@ export default function Workspace({ user }: Props) {
 
   const sandboxRef = useRef<SandboxHandle>(null)
   const probeSandboxRef = useRef<SandboxHandle>(null)
+  const qaSandboxRef = useRef<SandboxHandle>(null)
+  const qaTokenRef = useRef(0)
+  // 最近一份验收报告（实时或历史消息）：一键修复轮据此决定复测范围
+  const latestReportRef = useRef<Report | null>(null)
+  const qaKvStateRef = useRef<Record<string, string>>({})
+  // 破坏性用例会清空数据；刷新验证优先恢复 QA 期间出现过的最后一份非空快照
+  const qaKvSnapshotRef = useRef<Record<string, string>>({})
   const previewCandidateRef = useRef<{ id: string; model?: string } | null>(null)
   previewCandidateRef.current = previewCandidate
   const previewKvOpsRef = useRef<Array<Array<{ op: string; key: string; value?: string }>>>([])
@@ -421,6 +492,8 @@ export default function Workspace({ user }: Props) {
     try {
       const res = await api<{ project: ProjectDetail }>(`/api/projects/${projectId}`)
       setProject(res.project)
+      const latestReport = [...(res.project.messages || [])].reverse().find((m) => m.kind === 'report')
+      if (latestReport?.meta) latestReportRef.current = latestReport.meta as Report
       if (res.project.shareSlug && res.project.publishedVersionId) setSharePath(`/s/${res.project.shareSlug}`)
       if (res.project.html) setPreviewHtml(res.project.html)
       await loadKv(projectId)
@@ -502,6 +575,7 @@ export default function Workspace({ user }: Props) {
         setPreviewCandidate({ id: item.id, model: item.model })
         setPreviewNotice('候选预览（可能被最终胜者替换；交互暂不保存）')
         setPreviewHtml(html)
+        setRunFirstCandidate(true)
         showToast('候选预览已就绪，定稿前交互暂不保存')
         addConsole('info', `${item.model || '候选'} 已就绪，立即预览并实测（可能被最终胜者替换）`)
         await new Promise((r) => setTimeout(r, PROBE_DELAY_MS))
@@ -521,7 +595,83 @@ export default function Workspace({ user }: Props) {
     }
   }
 
-  /** 定稿时只有胜者就是早期预览候选，才把预览期间的交互合并到正式 KV；否则丢弃，避免串数据 */
+  /** 定稿后在隐藏沙箱跑 QA，结果回传服务端；新 run 会通过 token 取消旧 QA */
+  const startQa = async (runId: string, candidateId: string, previous?: Report['qa']) => {
+    const token = ++qaTokenRef.current
+    setQaHtml('')
+    setQaInitData(EMPTY_KV)
+    qaKvStateRef.current = {}
+    qaKvSnapshotRef.current = {}
+    const failedKinds = (previous?.cases || []).filter((c) => c.status === 'failed').map((c) => c.kind)
+    const retest = failedKinds.length > 0
+    try {
+      const res = await api<{ html: string }>(`/api/candidates/${candidateId}/html`)
+      if (token !== qaTokenRef.current) return
+      setQaHtml(res.html || '')
+      await new Promise((r) => setTimeout(r, 250))
+      if (token !== qaTokenRef.current) return
+      const report = await qaSandboxRef.current?.runQa(retest ? 'retest' : 'full', failedKinds)
+      if (token !== qaTokenRef.current) return
+      if (!report) {
+        addConsole('warn', 'QA 未返回结果，按探针与清单判定')
+        return
+      }
+      // 修复轮只复测失败用例 + 冒烟；其余用例沿用上一轮已执行证据
+      let merged = report
+      if (retest && previous) {
+        const retested = new Map(report.cases.map((c) => [c.kind, c]))
+        const cases = previous.cases.map((c) => {
+          const next = retested.get(c.kind)
+          return next ? { ...next, id: c.id, title: c.title } : c
+        })
+        for (const c of report.cases) {
+          if (!cases.some((x) => x.kind === c.kind)) cases.push(c)
+        }
+        merged = {
+          ...previous,
+          cases,
+          total: cases.length,
+          passed: cases.filter((c) => c.status === 'passed').length,
+          failed: cases.filter((c) => c.status === 'failed').length,
+          status: cases.some((c) => c.status === 'failed') ? 'failed' : 'passed',
+          durationMs: report.durationMs,
+          retested: report.cases.map((c) => c.kind),
+        }
+      }
+      // 刷新持久化：把本轮写入数据回灌到全新文档，再验一次实际渲染
+      const persistence = merged.cases.find((c) => c.kind === 'persistence')
+      const shouldReload = !retest || failedKinds.includes('persistence')
+      const reloadData = Object.keys(qaKvSnapshotRef.current).length
+        ? qaKvSnapshotRef.current
+        : qaKvStateRef.current
+      if (persistence && shouldReload && Object.keys(reloadData).length > 0) {
+        setQaInitData({ ...reloadData })
+        await new Promise((r) => setTimeout(r, 300))
+        if (token !== qaTokenRef.current) return
+        const reload = await qaSandboxRef.current?.runQa('persistence')
+        if (token !== qaTokenRef.current) return
+        const reloadCase = reload?.cases[0]
+        const updated = reloadCase
+          ? { ...persistence, status: reloadCase.status, evidence: reloadCase.evidence, durationMs: persistence.durationMs + reloadCase.durationMs }
+          : { ...persistence, status: 'failed' as const, evidence: '刷新后验证超时，未返回结果' }
+        merged.cases = merged.cases.map((c) => (c.id === persistence.id ? updated : c))
+        merged.passed = merged.cases.filter((c) => c.status === 'passed').length
+        merged.failed = merged.cases.length - merged.passed
+        merged.status = merged.failed > 0 ? 'failed' : 'passed'
+        merged.durationMs += reloadCase?.durationMs || 0
+      }
+      await api(`/api/runs/${runId}/qa`, { method: 'POST', body: { result: merged } })
+    } catch (err) {
+      addConsole('warn', `QA 执行失败：${(err as Error).message}`)
+    } finally {
+      if (token === qaTokenRef.current) {
+        setQaHtml('')
+        setQaInitData(EMPTY_KV)
+        qaKvStateRef.current = {}
+        qaKvSnapshotRef.current = {}
+      }
+    }
+  }
   const flushPreviewKv = async (winnerId?: string) => {
     const preview = previewCandidateRef.current
     const batches = previewKvOpsRef.current
@@ -548,6 +698,9 @@ export default function Workspace({ user }: Props) {
     setLiveReport(null)
     setLivePlan(null)
     setLiveConclusion('')
+    setRunFirstCandidate(false)
+    setLiveVersion(null)
+    setQaEnabled(null)
     finalCandidateRef.current = null
     previewCandidateRef.current = null
     setPreviewCandidate(null)
@@ -555,11 +708,16 @@ export default function Workspace({ user }: Props) {
     previewKvOpsRef.current = []
     hiddenQueueRef.current = []
     setProbeHtml('')
+    qaTokenRef.current += 1
+    setQaHtml('')
+    setQaInitData(EMPTY_KV)
+    qaKvStateRef.current = {}
+    qaKvSnapshotRef.current = {}
     let lastSeq = 0
     let attempts = 0
 
     const runOnce = async (): Promise<void> => {
-      const res = await fetch(`/api/runs/${runId}/events?from=${lastSeq}`, {
+      const res = await fetch(`/api/runs/${runId}/events?from=${lastSeq}&ui=1`, {
         credentials: 'same-origin',
         signal: controller.signal,
       })
@@ -627,10 +785,22 @@ export default function Workspace({ user }: Props) {
               break
             }
             case 'report':
+              latestReportRef.current = event.data as Report
               setLiveReport(event.data as Report)
               break
             case 'version':
               finalCandidateRef.current = { id: event.data?.candidateId || '', model: event.data?.model }
+              setLiveVersion({
+                seq: Number(event.data?.seq) || 0,
+                score: typeof event.data?.score === 'number' ? event.data.score : null,
+              })
+              setQaEnabled(event.data?.qa !== false)
+              setRunFirstCandidate(true)
+              if (event.data?.qa !== false && event.data?.candidateId) {
+                // 一键修复轮：读取上一份报告的失败用例，只复测失败项 + 冒烟
+                const previous = event.data?.mode === 'fix' ? latestReportRef.current?.qa || null : null
+                void startQa(runId, String(event.data.candidateId), previous)
+              }
               showToast(
                 `已保存版本 v${event.data?.seq}${event.data?.score != null ? ` · ${event.data.score} 分` : ''}${
                   event.data?.source === 'fallback' ? '（演示兜底模板）' : ''
@@ -667,6 +837,10 @@ export default function Workspace({ user }: Props) {
               previewKvOpsRef.current = []
               hiddenQueueRef.current = []
               setProbeHtml('')
+              qaTokenRef.current += 1
+              setQaHtml('')
+              setQaInitData(EMPTY_KV)
+              qaKvStateRef.current = {}
               finalCandidateRef.current = null
               break
             }
@@ -735,6 +909,8 @@ export default function Workspace({ user }: Props) {
         const p = await loadProject(id)
         if (cancelled) return
         setLoading(false)
+        const latestReport = [...(p?.messages || [])].reverse().find((m) => m.kind === 'report')
+        if (latestReport?.meta) latestReportRef.current = latestReport.meta as Report
         if (p?.activeRunId) {
           void connect(p.activeRunId)
         }
@@ -769,10 +945,19 @@ export default function Workspace({ user }: Props) {
 
   const send = async (override?: string, options?: { mode?: 'fix'; useTarget?: boolean }) => {
     const content = (override ?? input).trim()
-    if (!content || runStatus === 'running' || !project) return
+    if (!content || chatBusy || !project) return
     if (override === undefined) setInput('')
     setError('')
     try {
+      // QA 阶段发起新编辑：先停止旧 run（服务端会取消等待中的 QA），再基于当前版本创建新 run
+      if (qaPhase && connectedRef.current) {
+        qaTokenRef.current += 1
+        setQaHtml('')
+        setQaInitData(EMPTY_KV)
+        qaKvStateRef.current = {}
+        qaKvSnapshotRef.current = {}
+        await api(`/api/runs/${connectedRef.current}/stop`, { method: 'POST' }).catch(() => {})
+      }
       const res = await api<{ runId: string }>(`/api/projects/${project.id}/messages`, {
         method: 'POST',
         body: {
@@ -811,6 +996,10 @@ export default function Workspace({ user }: Props) {
   }
 
   const fixReport = (report: Report) => {
+    // 已达两轮修复上限后，历史报告卡片也不再提供一键修复
+    if (report.blocked || report.qa?.blocked || isRepairLimitReached(report.qa)) return
+    const latest = [...(project?.messages || [])].reverse().find((m) => m.kind === 'report')
+    if (latest?.meta?.blocked || latest?.meta?.qa?.blocked || isRepairLimitReached(latest?.meta?.qa)) return
     const failed = (report.checklist || [])
       .filter((i) => !i.pass)
       .map((i) => `- ${i.text || i.label || '验收项'}（${i.evidence || '未通过'}）`)
@@ -820,9 +1009,15 @@ export default function Workspace({ user }: Props) {
       .slice(-3)
       .map((e) => `- ${e.text}`)
       .join('\n')
+    const qaFailures = (report.qa?.cases || [])
+      .filter((c) => c.status === 'failed')
+      .slice(0, 6)
+      .map((c) => `- QA 失败：${c.title}（${c.evidence}）`)
+      .join('\n')
     const content = [
       '请修复以下问题，保持现有功能和数据结构不变：',
       failed || '- 验收清单存在未通过项',
+      qaFailures,
       errors ? `运行报错：\n${errors}` : '',
     ]
       .filter(Boolean)
@@ -887,11 +1082,53 @@ export default function Workspace({ user }: Props) {
   }
 
   const messages = project?.messages || []
+  // 最新报告 blocked（两轮修复后核心仍缺失）或已用完修复轮次时，历史报告卡片也不再展示一键修复
+  const latestReportMsg = [...messages].reverse().find((m) => m.kind === 'report')
+  const latestBlocked = Boolean(
+    latestReportMsg?.meta?.blocked ||
+      latestReportMsg?.meta?.qa?.blocked ||
+      isRepairLimitReached(latestReportMsg?.meta?.qa),
+  )
   // 完成后服务端消息里已包含报告/结论时，不再重复渲染实时副本
   const hasReportMessage = messages.some((m) => m.kind === 'report')
   const hasConclusionMessage = messages.some((m) => m.kind === 'conclusion')
   const running = runStatus === 'running'
+  // QA 阶段不阻塞编辑：用户可继续查看/操作成品，发送修改会取消本次 QA
+  const qaPhase = running && steps.qa?.status === 'running'
+  const chatBusy = running && !qaPhase
   const shareUrl = sharePath ? `${location.origin}${sharePath}` : ''
+  const latestConclusionMsg = [...messages].reverse().find((m) => m.kind === 'conclusion')
+  const versions = project?.versions || []
+  const completedVersion =
+    runStatus === 'idle' && versions.length > 0
+      ? {
+          seq: versions[0].seq,
+          score: versions[0].score,
+          needsFix: Boolean(latestReportMsg?.meta?.needsFix),
+        }
+      : null
+  const stageVersion = liveVersion
+    ? { seq: liveVersion.seq, score: liveReport?.score ?? liveVersion.score, needsFix: Boolean(liveReport?.needsFix) }
+    : completedVersion
+  const stageProgress = deriveStageProgress({
+    runStatus,
+    steps,
+    hasFirstCandidate: runStatus === 'idle' ? Boolean(completedVersion) : runFirstCandidate,
+    hasVersion: Boolean(stageVersion),
+    qaEnabled:
+      runStatus === 'idle'
+        ? latestReportMsg?.meta?.qa
+          ? true
+          : latestReportMsg
+            ? false
+            : null
+        : qaEnabled,
+    hasReport: runStatus === 'idle' ? Boolean(latestReportMsg) : Boolean(liveReport),
+    hasConclusion: runStatus === 'idle' ? Boolean(latestConclusionMsg) : Boolean(liveConclusion),
+    version: stageVersion,
+    completedQa: runStatus === 'idle' ? (latestReportMsg?.meta?.qa ? 'done' : 'skipped') : null,
+    error,
+  })
 
   if (loading) {
     return (
@@ -1034,7 +1271,7 @@ export default function Workspace({ user }: Props) {
                 </div>
               )}
               {messages.map((m) => (
-                <MessageItem key={m.id} msg={m} onFix={fixReport} />
+                <MessageItem key={m.id} msg={m} onFix={latestBlocked ? undefined : fixReport} />
               ))}
               {running && (
                 <>
@@ -1059,7 +1296,7 @@ export default function Workspace({ user }: Props) {
           </div>
 
           <div className="shrink-0 border-t border-line px-3 py-3 sm:px-4">
-            {running ? (
+            {chatBusy ? (
               <div className="flex items-center justify-between gap-3 rounded-xl border border-line bg-canvas-soft px-3 py-2.5">
                 <div className="flex items-center gap-2 text-[12px] text-ink-muted">
                   <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-brand" />
@@ -1084,9 +1321,11 @@ export default function Workspace({ user }: Props) {
                 />
                 <div className="mt-2 flex items-center justify-between">
                   <span className="min-w-0 truncate text-[10px] text-ink-faint">
-                    {pickedTarget
-                      ? `已点选 ${pickedTarget.tag}「${pickedTarget.text || pickedTarget.selector}」`
-                      : '修改会生成新版本，失败不覆盖当前版本'}
+                    {qaPhase
+                      ? 'QA 测试进行中，发送修改会取消本次 QA 并重新测试新版本'
+                      : pickedTarget
+                        ? `已点选 ${pickedTarget.tag}「${pickedTarget.text || pickedTarget.selector}」`
+                        : '修改会生成新版本，失败不覆盖当前版本'}
                   </span>
                   <div className="flex shrink-0 items-center gap-1.5">
                     {pickedTarget && (
@@ -1167,6 +1406,8 @@ export default function Workspace({ user }: Props) {
                 device === 'mobile' ? 'max-w-[390px]' : 'max-w-full'
               } ${tab === 'preview' ? '' : 'hidden'}`}
             >
+              {previewHtml && stageProgress.visible && <StageCompactBar progress={stageProgress} />}
+              <div className="relative flex min-h-0 flex-1 flex-col">
               {previewHtml ? (
                 <Sandbox
                   ref={sandboxRef}
@@ -1194,12 +1435,16 @@ export default function Workspace({ user }: Props) {
                   }}
                 />
               ) : (
-                <div className="grid h-full place-items-center px-6 text-center">
-                  <div>
-                    <div className="mx-auto spinner" />
-                    <p className="mt-4 text-[13px] font-medium text-ink-soft">正在生成第一个版本…</p>
-                    <p className="mt-1 text-[11px] text-ink-muted">左侧可以看到规划、生成与验收的完整过程</p>
-                  </div>
+                <div className="grid h-full place-items-center px-4 py-6 text-center">
+                  {stageProgress.visible ? (
+                    <StageFullPanel progress={stageProgress} />
+                  ) : (
+                    <div>
+                      <div className="mx-auto spinner" />
+                      <p className="mt-4 text-[13px] font-medium text-ink-soft">正在生成第一个版本…</p>
+                      <p className="mt-1 text-[11px] text-ink-muted">左侧可以看到规划、生成与验收的完整过程</p>
+                    </div>
+                  )}
                 </div>
               )}
               {/* 第二候选的隐藏沙箱：与可见预览同尺寸、不接收交互、不同步 KV，只用于并行等待后串行探针 */}
@@ -1215,6 +1460,53 @@ export default function Workspace({ user }: Props) {
                   />
                 </div>
               )}
+              {/* QA 独立隐藏沙箱：375×800 离屏渲染，独立 KV 作用域、不同步服务端，结束后卸载 */}
+              {qaHtml && (
+                <div
+                  className="pointer-events-none absolute"
+                  aria-hidden="true"
+                  style={{ left: '-2000px', top: 0, width: 375, height: 800 }}
+                >
+                  <Sandbox
+                    ref={qaSandboxRef}
+                    html={qaHtml}
+                    initData={qaInitData}
+                    scope={{ kind: 'project', projectId: project.id }}
+                    syncKv={false}
+                    onConsole={() => {}}
+                    onKvOps={(ops) => {
+                      for (const op of ops) {
+                        if (op.op === 'clear') {
+                          qaKvStateRef.current = {}
+                          continue
+                        }
+                        if (!op.key) continue
+                        if (op.op === 'set') {
+                          const value = op.value ?? ''
+                          qaKvStateRef.current[op.key] = value
+                          if (value.length > 2 && value !== '[]' && value !== '{}') {
+                            qaKvSnapshotRef.current[op.key] = value
+                          }
+                        } else if (op.op === 'del') {
+                          delete qaKvStateRef.current[op.key]
+                        }
+                      }
+                    }}
+                    onQaProgress={(p) => {
+                      setSteps((prev) => ({
+                        ...prev,
+                        qa: {
+                          key: 'qa',
+                          label: 'QA 测试',
+                          status: 'running',
+                          detail: `${p.index}/${p.total} 条 · 通过 ${p.passed} · 失败 ${p.failed}`,
+                        },
+                      }))
+                    }}
+                  />
+                </div>
+              )}
+              </div>
             </div>
 
             {tab === 'console' && (

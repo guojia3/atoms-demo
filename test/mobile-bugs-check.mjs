@@ -183,7 +183,8 @@ async function workspaceProbeCheck(cdp) {
   for (let i = 0; i < 90; i++) {
     const res = await api('GET', `/api/projects/${projectId}`)
     detail = res.json?.project || null
-    if (detail && detail.versions?.length > 0) break
+    // QA 阶段在版本保存后继续执行，需等 run 结束、报告回填后再读取实测分
+    if (detail && detail.versions?.length > 0 && !detail.activeRunId) break
     await sleep(500)
   }
   if (!detail || !detail.versions?.length) throw new Error('等待生成版本超时')

@@ -235,6 +235,13 @@ export function getVersion(id: string): VersionRow | undefined {
   return getOne<VersionRow>('SELECT * FROM versions WHERE id = ?', id)
 }
 
+/** QA 完成后更新版本分数/报告（版本行本身不重复创建） */
+export function updateVersion(id: string, fields: { score?: number; report_json?: string }): void {
+  const keys = Object.keys(fields) as Array<keyof typeof fields>
+  if (keys.length === 0) return
+  run(`UPDATE versions SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => fields[k]), id)
+}
+
 export function listVersions(projectId: string): VersionRow[] {
   return getAll<VersionRow>('SELECT * FROM versions WHERE project_id = ? ORDER BY seq DESC', projectId)
 }
@@ -368,6 +375,18 @@ export function getActiveRun(projectId: string): RunRow | undefined {
     "SELECT * FROM runs WHERE project_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1",
     projectId,
   )
+}
+
+/** 最近一次 create/edit 之后的 fix 轮数，用于“最多 2 轮修复+复测”上限 */
+export function countFixRunsSinceBase(projectId: string): number {
+  const row = getOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM runs
+     WHERE project_id = ? AND mode = 'fix'
+       AND started_at > COALESCE((SELECT MAX(started_at) FROM runs WHERE project_id = ? AND mode IN ('create','edit')), '')`,
+    projectId,
+    projectId,
+  )
+  return row?.n || 0
 }
 
 export function markInterruptedRuns(): number {

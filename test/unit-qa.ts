@@ -43,6 +43,41 @@ async function main(): Promise<void> {
   const { pickTemplate, mockHtml, escapeHtml } = await import('../src/server/mock/templates.js')
   const { buildSrcDoc } = await import('../src/client/components/Sandbox.js')
   const { SANDBOX_RUNTIME } = await import('../src/shared/runtime.js')
+  const { chooseQaCases, buildAcceptance, buildRetestPlan, isRepairLimitReached, QA_MAX_CASES, QA_MAX_REPAIR_ROUNDS } = await import('../src/shared/qa.js')
+  const { deriveStageProgress } = await import('../src/shared/stage-progress.js')
+
+  const qaFeatures = (patch: Partial<import('../src/shared/qa.js').QaFeatures> = {}) => ({
+    hasInput: false,
+    hasPrimary: false,
+    hasSecondary: false,
+    hasDelete: false,
+    hasClear: false,
+    hasList: false,
+    itemCount: 0,
+    listLike: false,
+    hasStorage: false,
+    hasKeyboard: false,
+    overflow: false,
+    width: 375,
+    ...patch,
+  })
+  const qaCase = (id: string, kind: string, status: 'passed' | 'failed' = 'passed', evidence = '已执行') => ({
+    id,
+    kind: kind as import('../src/shared/qa.js').QaCaseKind,
+    title: `${kind} 用例`,
+    status,
+    evidence,
+    durationMs: 100,
+  })
+  const qaReport = (cases: ReturnType<typeof qaCase>[]) => ({
+    status: cases.some((c) => c.status === 'failed') ? ('failed' as const) : ('passed' as const),
+    cases,
+    total: cases.length,
+    passed: cases.filter((c) => c.status === 'passed').length,
+    failed: cases.filter((c) => c.status === 'failed').length,
+    durationMs: 1200,
+    width: 375,
+  })
 
   const VALID_HTML = mockHtml('kanban', '做一个任务看板')
 
@@ -239,6 +274,292 @@ async function main(): Promise<void> {
     eq(full.source, 'heuristic', '来源')
     const none = heuristicReview(checklist, null, VALID_HTML)
     eq(none.score, 0, '无实测')
+  })
+
+  test('U18', 'QA 用例选择：无功能时只生成加载与视口检查', () => {
+    const specs = chooseQaCases(qaFeatures())
+    eq(specs.length, 2, '用例数')
+    eq(specs[0].kind, 'load', '首条')
+    eq(specs[1].kind, 'viewport', '次条')
+    assert(specs[1].title.includes('375'), '视口标题应包含实际宽度')
+  })
+
+  test('U19', 'QA 用例选择：功能齐全时覆盖主流程、表单、删除、持久化且不超过上限', () => {
+    const specs = chooseQaCases(
+      qaFeatures({
+        hasInput: true,
+        hasPrimary: true,
+        hasSecondary: true,
+        hasDelete: true,
+        hasClear: true,
+        hasList: true,
+        hasStorage: true,
+        hasKeyboard: true,
+      }),
+    )
+    eq(QA_MAX_CASES, 10, '上限')
+    assert(specs.length <= QA_MAX_CASES, `不应超过 ${QA_MAX_CASES} 条`)
+    eq(specs.length, 10, '完整功能应达到 10 条上限')
+    const kinds = specs.map((s) => s.kind)
+    for (const kind of ['load', 'viewport', 'main-flow', 'invalid-input', 'keyboard', 'delete', 'clear', 'last-delete', 'persistence', 'double-click']) {
+      assert(kinds.includes(kind as (typeof kinds)[number]), `缺少 ${kind}`)
+    }
+  })
+
+  test('U20', 'QA 预检过滤：没有对应功能的目标不生成用例', () => {
+    const noInput = chooseQaCases(qaFeatures({ hasPrimary: true, hasList: true, hasStorage: true }))
+    const kinds = noInput.map((s) => s.kind)
+    assert(!kinds.includes('invalid-input' as never), '无输入框不应生成表单用例')
+    assert(!kinds.includes('keyboard' as never), '无输入框不应生成键盘用例')
+    assert(!kinds.includes('delete' as never), '无删除按钮不应生成删除用例')
+    assert(!kinds.includes('last-delete' as never), '无删除按钮不应生成删最后一条用例')
+    assert(!kinds.includes('clear' as never), '无清空按钮不应生成清空用例')
+    const noStorage = chooseQaCases(qaFeatures({ hasPrimary: true, hasStorage: false }))
+    assert(!noStorage.map((s) => s.kind).includes('persistence' as never), '无存储写入不应生成持久化用例')
+  })
+
+  test('U21', '验收映射：只收录有已执行 QA 证据的条目，可选未实现项省略', () => {
+    const report = qaReport([
+      qaCase('qa1', 'load'),
+      qaCase('qa2', 'viewport'),
+      qaCase('qa3', 'main-flow'),
+      qaCase('qa4', 'persistence'),
+    ])
+    const acceptance = buildAcceptance(
+      [
+        { id: 'c1', text: '首屏可直接使用，无白屏' },
+        { id: 'c2', text: '可以添加记录' },
+        { id: 'c3', text: '刷新后数据仍在' },
+        { id: 'c4', text: '支持导出 PDF' },
+      ],
+      report,
+    )
+    eq(acceptance.items.length, 3, '可选未实现项不应出现')
+    eq(acceptance.score, 40, '验收分')
+    eq(acceptance.coreFailed, false, '核心缺失')
+    eq(acceptance.items.every((i) => i.caseIds.length > 0), true, '每条都应有 QA case 关联')
+    assert(!acceptance.items.some((i) => /未实现|未验证|未执行/.test(i.text)), '不应出现未实现/未验证行')
+  })
+
+  test('U22', '验收映射：核心需求缺功能判失败，两轮后 blocked', () => {
+    const report = qaReport([qaCase('qa1', 'viewport')])
+    const checklist = [{ id: 'c1', text: '首屏可直接使用，无白屏' }]
+    const first = buildAcceptance(checklist, report, 0)
+    eq(first.items.length, 1, '核心项应保留')
+    eq(first.items[0].status, 'failed', '核心项状态')
+    eq(first.items[0].caseIds.length, 0, '无关联用例')
+    eq(first.coreFailed, true, '核心缺失')
+    eq(first.blocked, false, '首轮不应 blocked')
+    const second = buildAcceptance(checklist, report, 1)
+    eq(second.blocked, false, '第 1 轮修复后不应 blocked')
+    const third = buildAcceptance(checklist, report, QA_MAX_REPAIR_ROUNDS)
+    eq(third.blocked, true, '达到修复上限应 blocked')
+    eq(third.maxRepairRounds, 2, '上限轮数')
+  })
+
+  test('U23', '验收映射：非核心项 QA 失败计分，核心全部通过时不算核心缺失', () => {
+    const report = qaReport([
+      qaCase('qa1', 'load'),
+      qaCase('qa2', 'main-flow'),
+      qaCase('qa3', 'keyboard', 'failed', '回车后无响应'),
+    ])
+    const acceptance = buildAcceptance(
+      [
+        { id: 'c1', text: '首屏可直接使用' },
+        { id: 'c2', text: '可以添加记录' },
+        { id: 'c3', text: '支持键盘操作' },
+      ],
+      report,
+    )
+    eq(acceptance.coreFailed, false, '核心缺失')
+    eq(acceptance.items.length, 3, '三条均有 QA 证据')
+    eq(acceptance.items.find((i) => i.id === 'c3')?.status, 'failed', '非核心失败状态')
+    eq(acceptance.score, 27, '验收分（2/3 通过）')
+  })
+
+  test('U24', '验收映射：可选需求全部未实现时不影响得分与展示', () => {
+    const report = qaReport([qaCase('qa1', 'load')])
+    const acceptance = buildAcceptance(
+      [
+        { id: 'c1', text: '首屏可直接使用' },
+        { id: 'c2', text: '可以添加记录' },
+        { id: 'c3', text: '支持导出 PDF' },
+        { id: 'c4', text: '支持多语言' },
+      ],
+      report,
+      0,
+    )
+    // c2 属于核心（前两条），没有 main-flow 用例 → 核心失败
+    eq(acceptance.coreFailed, true, '核心缺失')
+    eq(acceptance.items.length, 2, '只保留核心与有关联用例的条目')
+    eq(acceptance.items[0].status, 'passed', '核心首屏通过')
+    eq(acceptance.score, 20, '核心项按 1/2 计分')
+  })
+
+  test('U25', '修复轮复测计划：失败用例去重 + 1 条冒烟', () => {
+    eq(buildRetestPlan(['main-flow', 'main-flow', 'delete']).map((p) => p.kind).join(','), 'main-flow,delete,load', '失败项 + load')
+    eq(buildRetestPlan(['load', 'viewport']).map((p) => p.kind).join(','), 'load,viewport', 'load 失败时冒烟用 viewport')
+    eq(buildRetestPlan(['persistence']).map((p) => p.kind).join(','), 'persistence,main-flow', '持久化失败时用主流程造数')
+    assert(buildRetestPlan(['main-flow']).length <= QA_MAX_CASES, '复测计划不应超过上限')
+  })
+
+  test('U26', '修复上限：用完 2 轮且仍有失败后不再提供修复，与核心 blocked 区分', () => {
+    const failed = { ...qaReport([qaCase('qa1', 'load', 'failed', '执行失败')]), maxRepairRounds: 2 }
+    assert(!isRepairLimitReached({ ...failed, repairRounds: 0 }), '首轮不应达到上限')
+    assert(!isRepairLimitReached({ ...failed, repairRounds: 1 }), '第 1 轮后不应达到上限')
+    assert(isRepairLimitReached({ ...failed, repairRounds: 2 }), '第 2 轮后应达到上限')
+    const passed = { ...qaReport([qaCase('qa1', 'load')]), repairRounds: 2, maxRepairRounds: 2 }
+    assert(!isRepairLimitReached(passed), '全部通过不应显示修复上限')
+  })
+
+  const stageSteps = (patch: Record<string, 'running' | 'done' | 'failed'>) =>
+    Object.fromEntries(Object.entries(patch).map(([key, status]) => [key, { status }])) as Record<
+      string,
+      { status: 'running' | 'done' | 'failed' }
+    >
+
+  test('U27', '阶段映射：初始运行停在需求规划', () => {
+    const p = deriveStageProgress({
+      runStatus: 'running',
+      steps: { plan: { status: 'running' } },
+      hasFirstCandidate: false,
+      hasVersion: false,
+      qaEnabled: null,
+      hasReport: false,
+      hasConclusion: false,
+    })
+    eq(p.currentKey, 'plan', '当前阶段')
+    eq(p.currentIndex, 0, '索引')
+    eq(p.summary, '当前：需求规划 1/6', '摘要')
+    eq(p.stages[0].status, 'running', '规划进行中')
+    eq(p.stages[1].status, 'pending', '生成待执行')
+  })
+
+  test('U28', '阶段映射：规划完成进入生成，首候选就绪进入赛马', () => {
+    const generating = deriveStageProgress({
+      runStatus: 'running',
+      steps: stageSteps({ plan: 'done', generate: 'running' }),
+      hasFirstCandidate: false,
+      hasVersion: false,
+      qaEnabled: null,
+      hasReport: false,
+      hasConclusion: false,
+    })
+    eq(generating.currentKey, 'generate', '生成阶段')
+    eq(generating.stages[0].status, 'done', '规划已完成')
+    const racing = deriveStageProgress({
+      runStatus: 'running',
+      steps: stageSteps({ plan: 'done', generate: 'running' }),
+      hasFirstCandidate: true,
+      hasVersion: false,
+      qaEnabled: null,
+      hasReport: false,
+      hasConclusion: false,
+    })
+    eq(racing.currentKey, 'race', '赛马阶段')
+    eq(racing.summary, '当前：赛马 3/6', '赛马摘要')
+    eq(racing.stages[2].status, 'running', '赛马进行中')
+  })
+
+  test('U29', '阶段映射：版本保存进入测试，QA 完成后进入验收', () => {
+    const qa = deriveStageProgress({
+      runStatus: 'running',
+      steps: stageSteps({ plan: 'done', generate: 'done', review: 'running', qa: 'running' }),
+      hasFirstCandidate: true,
+      hasVersion: true,
+      qaEnabled: true,
+      hasReport: false,
+      hasConclusion: false,
+    })
+    eq(qa.currentKey, 'qa', '测试阶段')
+    eq(qa.stages[2].status, 'done', '赛马已完成')
+    eq(qa.stages[3].status, 'running', '测试进行中')
+    const acceptance = deriveStageProgress({
+      runStatus: 'running',
+      steps: stageSteps({ plan: 'done', generate: 'done', qa: 'done', review: 'running' }),
+      hasFirstCandidate: true,
+      hasVersion: true,
+      qaEnabled: true,
+      hasReport: true,
+      hasConclusion: false,
+    })
+    eq(acceptance.currentKey, 'acceptance', '验收阶段')
+    eq(acceptance.stages[3].status, 'done', '测试已完成')
+    eq(acceptance.stages[4].status, 'running', '验收进行中')
+  })
+
+  test('U30', '阶段映射：完成显示版本与得分，失败/停止不误显示完成', () => {
+    const done = deriveStageProgress({
+      runStatus: 'done',
+      steps: stageSteps({ plan: 'done', generate: 'done', qa: 'done', review: 'done', deliver: 'done' }),
+      hasFirstCandidate: true,
+      hasVersion: true,
+      qaEnabled: true,
+      hasReport: true,
+      hasConclusion: true,
+      version: { seq: 1, score: 100 },
+    })
+    eq(done.overall, 'done', '整体完成')
+    eq(done.currentKey, 'done', '当前完成')
+    eq(done.summary, '完成 · v1 · 100 分', '完成摘要')
+    assert(done.stages.every((s) => s.status === 'done'), '六阶段全部完成')
+    const failed = deriveStageProgress({
+      runStatus: 'failed',
+      steps: stageSteps({ plan: 'done', generate: 'done' }),
+      hasFirstCandidate: false,
+      hasVersion: false,
+      qaEnabled: null,
+      hasReport: false,
+      hasConclusion: false,
+      error: '所有候选均生成失败',
+    })
+    eq(failed.overall, 'failed', '整体失败')
+    eq(failed.summary, '失败', '失败摘要')
+    assert(failed.stages[5].status !== 'done', '不能把完成标为已完成')
+    const stopped = deriveStageProgress({
+      runStatus: 'stopped',
+      steps: stageSteps({ plan: 'done', generate: 'running' }),
+      hasFirstCandidate: false,
+      hasVersion: false,
+      qaEnabled: null,
+      hasReport: false,
+      hasConclusion: false,
+    })
+    eq(stopped.overall, 'stopped', '整体停止')
+    eq(stopped.summary, '已停止', '停止摘要')
+    assert(stopped.stages[5].status !== 'done', '停止不能标为完成')
+  })
+
+  test('U31', '阶段映射：QA 关闭时测试标跳过并直接进入验收', () => {
+    const p = deriveStageProgress({
+      runStatus: 'running',
+      steps: stageSteps({ plan: 'done', generate: 'done', review: 'running' }),
+      hasFirstCandidate: true,
+      hasVersion: true,
+      qaEnabled: false,
+      hasReport: false,
+      hasConclusion: false,
+    })
+    eq(p.currentKey, 'acceptance', '当前验收')
+    eq(p.stages[3].status, 'skipped', '测试跳过')
+    assert(!p.stages[3].statusLabel.includes('进行中'), '不应卡在测试中')
+  })
+
+  test('U32', '阶段映射：历史已完成项目显示完成，旧项目 QA 标跳过', () => {
+    const p = deriveStageProgress({
+      runStatus: 'idle',
+      steps: {},
+      hasFirstCandidate: true,
+      hasVersion: true,
+      qaEnabled: null,
+      hasReport: true,
+      hasConclusion: true,
+      version: { seq: 2, score: 92 },
+      completedQa: 'skipped',
+    })
+    eq(p.overall, 'done', '整体完成')
+    eq(p.summary, '完成 · v2 · 92 分', '完成摘要')
+    eq(p.stages[3].status, 'skipped', '无 QA 历史项目标跳过')
   })
 
   console.log(`\n[unit] 合计 ${total} 项，通过 ${passed} 项，失败 ${total - passed} 项`)

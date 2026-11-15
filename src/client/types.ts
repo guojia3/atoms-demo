@@ -1,3 +1,5 @@
+import type { AcceptanceReport, QaReport } from '../shared/qa'
+
 export interface User {
   id: string
   kind: 'guest' | 'email'
@@ -114,6 +116,10 @@ export interface Report {
   race?: RaceCandidate[]
   fallback?: boolean
   skipped?: Array<{ id: string; model: string; reason: string; graceMs: number }>
+  qa?: QaReport | null
+  acceptance?: AcceptanceReport | null
+  needsFix?: boolean
+  blocked?: boolean
 }
 
 export interface PickTarget {

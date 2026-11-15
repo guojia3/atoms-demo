@@ -5,6 +5,22 @@ export const SANDBOX_RUNTIME = String.raw`
   if (window.__ATOMS_RUNTIME__) return;
   window.__ATOMS_RUNTIME__ = true;
 
+  // QA 在离屏沙箱运行：禁止页面脚本把焦点抢进隐藏 iframe，避免影响用户正在操作的预览
+  var nativeFocus = window.HTMLElement && window.HTMLElement.prototype.focus;
+  if (nativeFocus) {
+    window.HTMLElement.prototype.focus = function () {
+      if (qaRunning) return;
+      return nativeFocus.apply(this, arguments);
+    };
+  }
+  var nativeWindowFocus = window.focus;
+  if (nativeWindowFocus) {
+    window.focus = function () {
+      if (qaRunning) return;
+      return nativeWindowFocus.apply(window, arguments);
+    };
+  }
+
   var INIT = window.__ATOMS_INIT__ || {};
   var initData = (INIT && INIT.data) || {};
   var localData = {};
@@ -110,11 +126,12 @@ export const SANDBOX_RUNTIME = String.raw`
   }
 
   window.alert = function (message) {
-    if (probing) return;
+    if (probing || qaRunning) return;
     showToast(message);
   };
   window.confirm = function (message) {
-    // 探针模式一律拒绝，保证批量点击不触发破坏性操作
+    // 探针模式与 QA 模式都不弹原生框；QA 在隔离沙箱内，自动确认以覆盖删除/清空流程
+    if (qaRunning) return true;
     if (probing) return false;
     var text = String(message == null ? '' : message);
     var now = Date.now();
@@ -294,10 +311,343 @@ export const SANDBOX_RUNTIME = String.raw`
     setTimeout(function () { probing = false; }, 8000);
   }
 
+  // ---------- QA 测试阶段：扫描实际 DOM 功能，执行确定性用例 ----------
+  var qaRunning = false;
+
+  function qaText(el) {
+    return String((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
+  }
+  function qaHasAny(text, words) {
+    for (var i = 0; i < words.length; i++) if (text.indexOf(words[i]) >= 0) return true;
+    return false;
+  }
+  function qaVisible(el) {
+    try {
+      var r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    } catch (e) { return false; }
+  }
+  function qaButtons() {
+    return Array.prototype.slice.call(document.querySelectorAll('button, [role="button"], input[type="submit"]'))
+      .filter(function (el) { return qaVisible(el) && !el.disabled; });
+  }
+  function qaInputs() {
+    return Array.prototype.slice.call(document.querySelectorAll('input, textarea'))
+      .filter(function (el) { return qaVisible(el) && !el.disabled && el.type !== 'hidden'; });
+  }
+  function qaItemCount() {
+    var nodes = document.querySelectorAll(
+      'li, [data-item], .item, .task, .note, .record, .habit, .board .card, .col .card, #list > *, [id*="list"] > *, [id*="List"] > *, [class*="list"] > *, [class*="List"] > *, [id*="history"] > *, [class*="history"] > *'
+    );
+    var count = 0;
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      var cls = el.className && typeof el.className === 'string' ? el.className : '';
+      if (cls.indexOf('empty') >= 0) continue;
+      var tag = el.tagName;
+      if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'TEMPLATE') continue;
+      count++;
+    }
+    return count;
+  }
+  function qaPrimaryButton() {
+    var words = ['添加', '新增', '保存', '提交', '开始', '生成', '记录', '确定', '创建', '加入', '购买', '发送'];
+    var list = qaButtons();
+    for (var i = 0; i < list.length; i++) if (qaHasAny(qaText(list[i]), words)) return list[i];
+    return null;
+  }
+  function qaDestructiveButton(words) {
+    var list = qaButtons();
+    for (var i = 0; i < list.length; i++) if (qaHasAny(qaText(list[i]), words)) return list[i];
+    return null;
+  }
+  function qaSetInput(el, value) {
+    var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  var qaTicks = {};
+  var qaTickSeq = 0;
+  function resolveQaTick(id) {
+    var fn = qaTicks[id];
+    if (fn) {
+      delete qaTicks[id];
+      fn();
+    }
+  }
+  // 隐藏 iframe 里 setTimeout 会被浏览器钳制到 ~1s；改为让父页面计时后回传 tick
+  function qaWait(ms) {
+    return new Promise(function (resolve) {
+      var id = 'w' + (++qaTickSeq);
+      qaTicks[id] = resolve;
+      post('atoms-qa-wait', { id: id, ms: ms });
+      setTimeout(function () { resolveQaTick(id); }, Math.max(1200, ms + 1000));
+    });
+  }
+  function qaSnapshot() {
+    return {
+      mutations: mutationCount,
+      writes: totalWrites,
+      errors: errors.length,
+      items: qaItemCount(),
+      text: qaText(document.body)
+    };
+  }
+  function qaChanged(before) {
+    var after = qaSnapshot();
+    return after.mutations > before.mutations || after.writes > before.writes ||
+      after.items !== before.items || after.text !== before.text;
+  }
+  /** 只扫描应用自身代码与 DOM，排除注入的运行时/初始化脚本，避免把 QA 代码误判为页面功能 */
+  function qaAppContent() {
+    var code = '';
+    var scripts = document.querySelectorAll('script');
+    for (var i = 0; i < scripts.length; i++) {
+      var t = scripts[i].textContent || '';
+      if (t.indexOf('__ATOMS_RUNTIME__') >= 0 || t.indexOf('__ATOMS_INIT__') >= 0 || t.indexOf('atoms-qa-') >= 0) continue;
+      code += t;
+    }
+    var bodyHtml = '';
+    try { bodyHtml = document.body ? document.body.innerHTML : ''; } catch (e) { /* noop */ }
+    return { code: code, html: bodyHtml };
+  }
+
+  function qaFeatures() {
+    var primary = qaPrimaryButton();
+    var buttons = qaButtons();
+    var inputs = qaInputs();
+    var secondary = buttons.filter(function (el) { return el !== primary && !qaHasAny(qaText(el), ['删除', '移除', '清空', '重置', '退出', '注销']); });
+    var app = qaAppContent();
+    var hint = app.code + ' ' + app.html;
+    var itemCount = qaItemCount();
+    var listLike =
+      /<(ul|ol)[\s>]/i.test(app.html) ||
+      /id="[^"]*(list|history)|class="[^"]*(list|history)/i.test(app.html);
+    return {
+      hasInput: inputs.length > 0,
+      hasPrimary: Boolean(primary),
+      hasSecondary: secondary.length > 0,
+      // 删除/清空按钮可能只在有数据后出现；只按实际按钮或脚本能力判断，避免把需求文案当成功能
+      hasDelete: Boolean(qaDestructiveButton(['删除', '移除'])) || /删除|移除/.test(app.code),
+      hasClear: Boolean(qaDestructiveButton(['清空', '重置', '全部删除'])) || /清空|重置|全部删除/.test(app.code),
+      hasList: itemCount > 0 || listLike || /card|grid/i.test(app.html),
+      itemCount: itemCount,
+      listLike: listLike,
+      // 只在页面脚本确实使用存储或已经发生写入时才生成持久化用例
+      hasStorage: /localStorage|sessionStorage/i.test(app.code) || totalWrites > 0 || Object.keys(localData).length > 0,
+      // 只有存在输入框且页面声明了键盘/滑动交互时才生成键盘用例
+      hasKeyboard: inputs.length > 0 && /keydown|keyup|keypress|ArrowLeft|ArrowRight|ArrowUp|ArrowDown|Enter|touchstart|touchmove|swipe/i.test(hint),
+      overflow: document.documentElement.scrollWidth > window.innerWidth + 2,
+      width: window.innerWidth
+    };
+  }
+
+  /** 破坏性用例前确保列表里有数据；没有则先走一次主流程创建 */
+  function qaEnsureItem() {
+    if (qaItemCount() > 0) return Promise.resolve(true);
+    var primary = qaPrimaryButton();
+    var input = qaInputs()[0];
+    if (!primary) return Promise.resolve(false);
+    var before = qaSnapshot();
+    if (input) qaSetInput(input, 'QA 用例项');
+    try { primary.click(); } catch (e) { /* noop */ }
+    return qaWait(180).then(function () {
+      return qaItemCount() > 0 || qaChanged(before);
+    });
+  }
+
+  function qaRemoveLoop(left) {
+    if (left <= 0) return Promise.resolve();
+    var btn = qaDestructiveButton(['删除', '移除']);
+    if (!btn) return Promise.resolve();
+    try { btn.click(); } catch (e) { /* noop */ }
+    return qaWait(140).then(function () { return qaRemoveLoop(left - 1); });
+  }
+
+  function qaRunCase(kind, spec) {
+    var primary = qaPrimaryButton();
+    var input = qaInputs()[0];
+    var before = qaSnapshot();
+    var result = { ok: false, evidence: '' };
+    var ok = false;
+    spec = spec || {};
+    function done(ok, evidence) { result.ok = ok; result.evidence = evidence; return result; }
+    try {
+      if (kind === 'load') {
+        var text = qaText(document.body);
+        ok = document.querySelectorAll('*').length >= 5 && text.length >= 8 && errors.length === 0;
+        return done(ok, ok ? '页面已加载，未捕获 JS 报错' : '元素/文本不足或存在 ' + errors.length + ' 条报错');
+      }
+      if (kind === 'viewport') {
+        ok = document.documentElement.scrollWidth <= window.innerWidth + 2;
+        return done(ok, ok ? window.innerWidth + 'px 下无横向溢出' : window.innerWidth + 'px 下出现横向溢出');
+      }
+      if (kind === 'main-flow') {
+        if (!primary) return done(false, '未找到主要按钮');
+        if (input) qaSetInput(input, 'QA 测试项');
+        primary.click();
+        return qaWait(180).then(function () {
+          var changed = qaChanged(before);
+          return done(changed, changed ? '点击「' + qaText(primary) + '」后有界面/数据变化' : '点击「' + qaText(primary) + '」后无变化');
+        });
+      }
+      if (kind === 'buttons') {
+        // 前序删除用例可能把带按钮的记录清空；先确保页面有可操作记录再测次要按钮
+        return qaEnsureItem().then(function () {
+          var list = qaButtons().filter(function (el) { return el !== primary && !qaHasAny(qaText(el), ['删除', '移除', '清空', '重置', '退出', '注销']); }).slice(0, 2);
+          if (list.length === 0) return done(false, '未找到可测试的次要按钮');
+          list.forEach(function (el) { try { el.click(); } catch (e) { /* noop */ } });
+          return qaWait(160).then(function () {
+            var newErrors = errors.length - before.errors;
+            return done(newErrors === 0, newErrors === 0 ? '点击 ' + list.length + ' 个按钮未产生新报错' : '点击按钮产生 ' + newErrors + ' 条报错');
+          });
+        });
+      }
+      if (kind === 'invalid-input') {
+        if (!input || !primary) return done(false, '缺少输入框或主要按钮');
+        qaSetInput(input, '');
+        primary.click();
+        return qaWait(140).then(function () {
+          var newErrors = errors.length - before.errors;
+          return done(newErrors === 0, newErrors === 0 ? '空输入未导致崩溃' : '空输入产生 ' + newErrors + ' 条报错');
+        });
+      }
+      if (kind === 'delete') {
+        return qaEnsureItem().then(function (ready) {
+          if (!ready) return done(false, '没有可删除的记录，且无法通过主流程创建');
+          var del = qaDestructiveButton(['删除', '移除']);
+          if (!del) return done(false, '执行中删除按钮消失');
+          var itemsBefore = qaItemCount();
+          var snap = qaSnapshot();
+          try { del.click(); } catch (e) { /* noop */ }
+          return qaWait(180).then(function () {
+            var decreased = qaItemCount() < itemsBefore || qaChanged(snap);
+            return done(decreased, decreased ? '删除后记录数 ' + itemsBefore + '→' + qaItemCount() : '删除后记录数未减少');
+          });
+        });
+      }
+      if (kind === 'clear') {
+        return qaEnsureItem().then(function (ready) {
+          if (!ready) return done(false, '列表为空，且无法通过主流程创建记录');
+          var clear = qaDestructiveButton(['清空', '重置', '全部删除']);
+          if (!clear) return done(false, '执行中清空按钮消失');
+          var snap = qaSnapshot();
+          try { clear.click(); } catch (e) { /* noop */ }
+          return qaWait(200).then(function () {
+            var empty = qaItemCount() === 0;
+            return done(empty || qaChanged(snap), empty ? '清空后列表为空' : '清空后列表仍有 ' + qaItemCount() + ' 条');
+          });
+        });
+      }
+      if (kind === 'persistence') {
+        var keys = Object.keys(localData).filter(function (k) { return String(localData[k] || '').length > 0; });
+        var items = qaItemCount();
+        var expectItems = Boolean(spec.expectItems);
+        var readable = keys.length > 0 && (!expectItems || items > 0);
+        var prefix = spec.reload ? '刷新后 ' : '';
+        return done(
+          readable,
+          readable
+            ? prefix + 'localStorage ' + keys.length + ' 个键可读回' + (items ? '，页面恢复 ' + items + ' 条记录' : '')
+            : prefix + '未检测到可读回的数据' + (expectItems && keys.length ? '（页面未恢复列表）' : '')
+        );
+      }
+      if (kind === 'double-click') {
+        if (!primary) return done(false, '未找到主要按钮');
+        primary.click();
+        primary.click();
+        return qaWait(180).then(function () {
+          var newErrors = errors.length - before.errors;
+          return done(newErrors === 0, newErrors === 0 ? '快速双击未产生报错' : '快速双击产生 ' + newErrors + ' 条报错');
+        });
+      }
+      if (kind === 'keyboard') {
+        if (!input) return done(false, '未找到输入框');
+        qaSetInput(input, 'QA 键盘项');
+        var snap = qaSnapshot();
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+        return qaWait(180).then(function () {
+          var newErrors = errors.length - before.errors;
+          var changed = qaChanged(snap);
+          return done(newErrors === 0, newErrors === 0 ? (changed ? '回车后界面有变化' : '回车未产生报错') : '回车键产生 ' + newErrors + ' 条报错');
+        });
+      }
+      if (kind === 'last-delete') {
+        return qaEnsureItem().then(function (ready) {
+          if (!ready) return done(false, '没有可删除的记录，且无法通过主流程创建');
+          if (!qaDestructiveButton(['删除', '移除'])) return done(false, '执行中删除按钮消失');
+          return qaRemoveLoop(10).then(function () {
+            return done(qaItemCount() === 0, qaItemCount() === 0 ? '删除到最后一条后列表为空' : '仍有 ' + qaItemCount() + ' 条未删除');
+          });
+        });
+      }
+      return done(false, '未知用例类型');
+    } catch (err) {
+      return done(false, '执行异常：' + (err && err.message ? err.message : 'unknown'));
+    }
+  }
+
+  function qaPostInventory(id) {
+    post('atoms-qa-inventory', { id: id, features: qaFeatures() });
+  }
+
+  async function qaExecutePlan(id, specs) {
+    if (qaRunning) return;
+    qaRunning = true;
+    var started = Date.now();
+    var cases = [];
+    var passedCount = 0;
+    var failedCount = 0;
+    try {
+      for (var i = 0; i < specs.length; i++) {
+        var spec = specs[i] || {};
+        var caseStarted = Date.now();
+        var outcome;
+        try {
+          outcome = await qaRunCase(spec.kind, spec);
+        } catch (err) {
+          outcome = { ok: false, evidence: '执行异常：' + (err && err.message ? err.message : 'unknown') };
+        }
+        if (outcome.ok) passedCount += 1; else failedCount += 1;
+        cases.push({
+          id: 'qa' + (i + 1),
+          kind: spec.kind,
+          title: spec.title || spec.kind,
+          status: outcome.ok ? 'passed' : 'failed',
+          evidence: outcome.evidence || '',
+          durationMs: Date.now() - caseStarted
+        });
+        post('atoms-qa-progress', {
+          id: id,
+          index: i + 1,
+          total: specs.length,
+          passed: passedCount,
+          failed: failedCount,
+          title: spec.title || spec.kind,
+          status: outcome.ok ? 'passed' : 'failed'
+        });
+        await qaWait(80);
+      }
+      post('atoms-qa-result', {
+        id: id,
+        cases: cases,
+        durationMs: Date.now() - started,
+        width: window.innerWidth
+      });
+    } finally {
+      qaRunning = false;
+    }
+  }
+
   window.addEventListener('message', function (event) {
     var data = event.data || {};
     if (typeof data !== 'object') return;
     if (data.type === 'atoms-probe') { runProbe(data.id); return; }
+    if (data.type === 'atoms-qa-start') { qaPostInventory(data.id); return; }
+    if (data.type === 'atoms-qa-plan' && Array.isArray(data.cases)) { qaExecutePlan(data.id, data.cases); return; }
+    if (data.type === 'atoms-qa-tick') { resolveQaTick(data.id); return; }
     if (data.type === 'atoms-pick-start') {
       pickMode = true;
       try { document.body.style.cursor = 'crosshair'; } catch (e) { /* noop */ }

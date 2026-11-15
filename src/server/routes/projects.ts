@@ -8,6 +8,7 @@ import {
   createProject,
   createRun,
   createVersion,
+  countFixRunsSinceBase,
   deleteProject,
   findProjectBySlug,
   getActiveRun,
@@ -196,6 +197,10 @@ router.post('/projects/:id/messages', (req, res) => {
   const active = getActiveRun(project.id)
   if (active) {
     res.status(409).json({ error: '当前有任务正在进行，请等待完成或先停止' })
+    return
+  }
+  if (req.body?.mode === 'fix' && countFixRunsSinceBase(project.id) >= 2) {
+    res.status(409).json({ error: '已达到 2 轮修复上限，请手动编辑或新开项目' })
     return
   }
   if (!takeGenerationQuota(req, res)) return

@@ -4,10 +4,12 @@ import { emit } from './hub.js'
 import { createPlan, mockPlan, type Plan, type ChecklistItem } from '../agents/planner.js'
 import { generateCandidate, type GeneratedCandidate } from '../agents/engineer.js'
 import { reviewChecklist } from '../agents/reviewer.js'
+import { buildAcceptance, QA_MAX_CASES, type QaCase, type QaReport } from '../../shared/qa.js'
 import { staticCheck } from '../verify/static-check.js'
 import { scoreProbe, type ProbeMetrics } from '../verify/score.js'
 import {
   addMessage,
+  countFixRunsSinceBase,
   createCandidate,
   createVersion,
   getCandidate,
@@ -17,6 +19,7 @@ import {
   touchProject,
   updateCandidate,
   updateRun,
+  updateVersion,
 } from '../store.js'
 
 interface PendingReport {
@@ -28,12 +31,15 @@ const pendingReports = new Map<string, PendingReport>()
 const receivedReports = new Map<string, ProbeMetrics>()
 const stoppedRuns = new Set<string>()
 const runControllers = new Map<string, Set<AbortController>>()
+const uiRuns = new Set<string>()
+const pendingQa = new Map<string, { resolve: (report: QaReport | null) => void; timer: ReturnType<typeof setTimeout> }>()
 
 const STEP_LABELS: Record<string, string> = {
   plan: 'Mike 拆解需求',
   generate: 'Alex 生成页面',
   verify: '静态检查 + 浏览器实测',
   review: '逐条验收',
+  qa: 'QA 测试',
   deliver: '保存版本与结论',
 }
 
@@ -53,6 +59,13 @@ export function stopRun(runId: string): void {
     } catch {
       /* noop */
     }
+  }
+  // 取消等待中的 QA，避免停止后仍占着 15s 超时窗口
+  const qa = pendingQa.get(runId)
+  if (qa) {
+    clearTimeout(qa.timer)
+    pendingQa.delete(runId)
+    qa.resolve(null)
   }
   const run = getRun(runId)
   if (run && run.status === 'running') {
@@ -99,6 +112,57 @@ function cancelReportWait(candidateId: string): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)))
+}
+
+/** 有浏览器 UI 订阅该 run 时才执行 QA，纯 API/烟测不等待隐藏沙箱 */
+export function noteUiClient(runId: string): void {
+  uiRuns.add(runId)
+}
+
+/** 接收隐藏沙箱的 QA 结果；重复/迟到上报忽略 */
+export function resolveQa(runId: string, raw: unknown): boolean {
+  const pending = pendingQa.get(runId)
+  if (!pending) return false
+  const payload = (raw || {}) as { cases?: unknown; durationMs?: unknown; width?: unknown; retested?: unknown }
+  if (!Array.isArray(payload.cases) || payload.cases.length === 0) return false
+  const cases: QaCase[] = payload.cases.slice(0, QA_MAX_CASES).map((item, index) => {
+    const c = (item || {}) as Record<string, unknown>
+    const status = c.status === 'failed' ? 'failed' : 'passed'
+    return {
+      id: String(c.id || `qa${index + 1}`).slice(0, 20),
+      kind: String(c.kind || 'unknown').slice(0, 40) as QaCase['kind'],
+      title: String(c.title || 'QA 用例').slice(0, 120),
+      status,
+      evidence: String(c.evidence || '').slice(0, 400),
+      durationMs: Math.max(0, Math.min(60000, Number(c.durationMs) || 0)),
+    }
+  })
+  clearTimeout(pending.timer)
+  pendingQa.delete(runId)
+  const retested = Array.isArray(payload.retested)
+    ? payload.retested.slice(0, QA_MAX_CASES).map((kind) => String(kind).slice(0, 40) as QaCase['kind'])
+    : undefined
+  pending.resolve({
+    status: cases.some((c) => c.status === 'failed') ? 'failed' : 'passed',
+    cases,
+    total: cases.length,
+    passed: cases.filter((c) => c.status === 'passed').length,
+    failed: cases.filter((c) => c.status === 'failed').length,
+    durationMs: Math.max(0, Number(payload.durationMs) || 0),
+    width: Math.max(0, Number(payload.width) || 0),
+    ...(retested?.length ? { retested } : {}),
+  })
+  return true
+}
+
+function waitForQa(runId: string, timeoutMs: number): Promise<QaReport | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingQa.delete(runId)
+      resolve(null)
+    }, timeoutMs)
+    pendingQa.set(runId, { resolve, timer })
+  })
 }
 
 function candidateModelName(index: number, total: number): string {
@@ -214,6 +278,7 @@ export async function executeRun(runId: string): Promise<void> {
       staticResult: ReturnType<typeof staticCheck>
     }
     type ScoredCandidate = CandidateResult & {
+      checklist: ChecklistItem[]
       metrics: ProbeMetrics | null
       probe: ReturnType<typeof scoreProbe>
       review: Awaited<ReturnType<typeof reviewChecklist>>
@@ -260,6 +325,7 @@ export async function executeRun(runId: string): Promise<void> {
       const totalScore = item.staticResult.score + probe.score + review.score
       return {
         ...item,
+        checklist: candidateChecklist,
         metrics,
         probe,
         review,
@@ -525,17 +591,107 @@ export async function executeRun(runId: string): Promise<void> {
     })
     const reportNotes = [...winner.generated.notes, ...skipNotes]
     const fallbackWinner = winner.generated.source === 'fallback'
-    const report = { ...winner.report, notes: reportNotes, race, skipped, fallback: fallbackWinner }
-    updateCandidate(winner.candidate.id, { score: winner.totalScore, report_json: JSON.stringify(report) })
-    emit(runId, 'report', report)
+    const baseReport = { ...winner.report, notes: reportNotes, race, skipped, fallback: fallbackWinner }
     const winnerLabel = race.find((r) => r.adopted)?.label || '候选A'
-    const passCount = winner.review.items.filter((i) => i.pass).length
     emitStep(
       runId,
       'review',
       'done',
-      `${raceCount > 1 ? `${race.map((r) => `${r.label} ${r.score}`).join(' / ')}，择优采用 ${winnerLabel}` : `${winner.totalScore} 分`}，清单通过 ${passCount}/${winner.review.items.length}`,
+      `${raceCount > 1 ? `${race.map((r) => `${r.label} ${r.score}`).join(' / ')}，择优采用 ${winnerLabel}` : `${winner.totalScore} 分`}，清单通过 ${winner.review.items.filter((i) => i.pass).length}/${winner.review.items.length}`,
     )
+
+    const generated = winner.generated
+    const source =
+      generated.source === 'model' ? (run.mode === 'create' ? 'generate' : 'edit') : generated.source === 'fallback' ? 'fallback' : 'mock'
+    if (isStopped(runId)) return
+    const version = createVersion({
+      projectId: project.id,
+      html: generated.html,
+      model: generated.model,
+      source,
+      score: winner.totalScore,
+      report: baseReport,
+    })
+    touchProject(project.id, { current_version_id: version.id })
+    const qaEnabled = config.qaEnabled && uiRuns.has(runId)
+    emit(runId, 'version', {
+      versionId: version.id,
+      seq: version.seq,
+      score: winner.totalScore,
+      candidateId: winner.candidate.id,
+      model: generated.model,
+      source,
+      adopted: true,
+      qa: qaEnabled,
+      mode: run.mode,
+      skipped,
+    })
+
+    // QA 只对最终胜者执行，在隐藏沙箱完成；不阻塞版本保存与预览
+    let qa: QaReport | null = null
+    let acceptance: ReturnType<typeof buildAcceptance> | null = null
+    let finalScore = winner.totalScore
+    let finalParts = { ...baseReport.parts }
+    let qaReport: QaReport | null = null
+    if (qaEnabled) {
+      emitStep(runId, 'qa', 'running', '在隐藏沙箱扫描实际功能并执行确定性用例…')
+      qa = await waitForQa(runId, config.qaTimeoutMs)
+      // QA 期间用户发起新编辑：旧 run 已停止，不再写报告/版本分数
+      if (isStopped(runId)) return
+      if (qa) {
+        const repairRounds = countFixRunsSinceBase(project.id)
+        acceptance = buildAcceptance(winner.checklist || checklist, qa, repairRounds)
+        finalParts = { ...finalParts, checklist: acceptance.score }
+        finalScore = winner.staticResult.score + winner.probe.score + acceptance.score
+        qaReport = {
+          ...qa,
+          repairRounds,
+          maxRepairRounds: acceptance.maxRepairRounds,
+          blocked: acceptance.blocked,
+        }
+        emitStep(
+          runId,
+          'qa',
+          acceptance.coreFailed || qa.failed > 0 ? 'failed' : 'done',
+          `QA ${qa.passed}/${qa.total} 通过${qa.failed ? `，失败 ${qa.failed} 条` : ''}${
+            acceptance.coreFailed ? '；核心需求未通过' : ''
+          }`,
+        )
+      } else {
+        emitStep(runId, 'qa', 'failed', '未收到 QA 结果（超时或沙箱未连接），已按探针与清单判定')
+      }
+    }
+    const qaFailed = qa?.failed || 0
+    const coreFailed = Boolean(acceptance?.coreFailed)
+    const blocked = Boolean(acceptance?.blocked)
+    const passed = finalScore >= 70 && !coreFailed && qaFailed === 0 && !blocked
+    const needsFix = qaFailed > 0 || coreFailed || finalScore < 70
+    const finalReport = {
+      ...baseReport,
+      score: finalScore,
+      parts: finalParts,
+      qa: qaReport,
+      acceptance,
+      needsFix,
+      blocked,
+      checklist: acceptance
+        ? acceptance.items.map((item) => ({
+            id: item.id,
+            text: item.text,
+            pass: item.status === 'passed',
+            evidence: item.evidence,
+          }))
+        : baseReport.checklist,
+    }
+    updateVersion(version.id, { score: finalScore, report_json: JSON.stringify(finalReport) })
+    updateCandidate(winner.candidate.id, { score: finalScore, report_json: JSON.stringify(finalReport) })
+    emit(runId, 'report', finalReport)
+
+    const passCount = acceptance
+      ? acceptance.items.filter((i) => i.status === 'passed').length
+      : winner.review.items.filter((i) => i.pass).length
+    const totalItems = acceptance ? acceptance.items.length : winner.review.items.length
+    const qaLine = qa ? `QA 测试：${qa.passed}/${qa.total} 通过${qa.failed ? `，失败 ${qa.failed} 条` : ''}。` : ''
     const raceLine =
       raceCount > 1
         ? `双路赛马：${race.map((r) => `${r.label} ${r.score} 分${r.adopted ? '（采用）' : ''}`).join('，')}。`
@@ -548,32 +704,13 @@ export async function executeRun(runId: string): Promise<void> {
       content: [
         raceLine,
         skipLine,
-        reportSummary(winner.totalScore, report.parts, passCount, winner.review.items.length, reportNotes),
+        qaLine,
+        reportSummary(finalScore, finalParts, passCount, totalItems, reportNotes),
       ]
         .filter(Boolean)
         .join('\n'),
-      meta: report,
+      meta: finalReport,
     })
-
-    const generated = winner.generated
-    const totalScore = winner.totalScore
-    const metrics = winner.metrics
-
-    if (isStopped(runId)) return
-
-    // 4) 采用与结论
-    emitStep(runId, 'deliver', 'running')
-    const source =
-      generated.source === 'model' ? (run.mode === 'create' ? 'generate' : 'edit') : generated.source === 'fallback' ? 'fallback' : 'mock'
-    const version = createVersion({
-      projectId: project.id,
-      html: generated.html,
-      model: generated.model,
-      source,
-      score: totalScore,
-      report,
-    })
-    touchProject(project.id, { current_version_id: version.id })
     addMessage({
       projectId: project.id,
       role: 'agent',
@@ -582,34 +719,30 @@ export async function executeRun(runId: string): Promise<void> {
       meta: {
         versionId: version.id,
         seq: version.seq,
-        score: totalScore,
+        score: finalScore,
         model: generated.model,
         candidateId: winner.candidate.id,
         source,
         adopted: true,
       },
     })
-    emit(runId, 'version', {
-      versionId: version.id,
-      seq: version.seq,
-      score: totalScore,
-      candidateId: winner.candidate.id,
-      model: generated.model,
-      source,
-      adopted: true,
-      skipped,
-    })
 
-    const passed = totalScore >= 70
+    emitStep(runId, 'deliver', 'running')
     const fallbackNote = fallbackWinner
       ? '演示兜底：模型未能生成可用页面，已使用内置模板；内容与原始需求可能不完全一致，建议重试。'
       : ''
+    const blockedNote = blocked
+      ? '核心需求在两轮修复后仍未实现，本次生成失败，不自动发布；可手动继续编辑或新建项目。'
+      : ''
+    const qaNote = qaFailed > 0 && !blocked ? `QA 有 ${qaFailed} 条失败，可一键修复复测（最多 2 轮）。` : ''
     const conclusion = [
       fallbackNote,
-      `已采用 v${version.seq}（${totalScore} 分，${generated.model}）${raceCount > 1 ? `，从 ${race.length} 个候选中择优` : ''}。`,
+      `已采用 v${version.seq}（${finalScore} 分，${generated.model}）${raceCount > 1 ? `，从 ${race.length} 个候选中择优` : ''}。`,
       skipNotes.length ? `${skipNotes.join('；')}。` : '',
-      passed ? '验收通过，可直接预览、发布或继续迭代。' : '总分低于 70，已保留该版本，建议按报告中的未通过项继续修改。',
-      metrics ? '' : '（本次未收到浏览器实测，分数仅由静态检查与清单估算）',
+      blockedNote,
+      qaNote,
+      passed ? '验收通过，可直接预览、发布或继续迭代。' : blocked ? '' : '验收未通过，已保留该版本，建议按 QA/验收报告修复后继续。',
+      winner.metrics ? '' : '（本次未收到浏览器实测，分数仅由静态检查与清单估算）',
     ]
       .filter(Boolean)
       .join('')
@@ -618,28 +751,42 @@ export async function executeRun(runId: string): Promise<void> {
       role: 'agent',
       kind: 'conclusion',
       content: conclusion,
-      meta: { score: totalScore, adopted: true, status: passed ? 'passed' : 'needs-fix', versionSeq: version.seq, fallback: generated.source !== 'model' },
+      meta: {
+        score: finalScore,
+        adopted: true,
+        status: passed ? 'passed' : 'needs-fix',
+        versionSeq: version.seq,
+        fallback: generated.source !== 'model',
+        blocked,
+      },
     })
     emit(runId, 'conclusion', {
-      score: totalScore,
+      score: finalScore,
       adopted: true,
       status: passed ? 'passed' : 'needs-fix',
       versionSeq: version.seq,
       content: conclusion,
+      blocked,
     })
     emitStep(runId, 'deliver', 'done', `v${version.seq} 已保存`)
 
     // 停止竞态：收尾阶段被停止时保持 stopped，不写 done
     if (isStopped(runId)) return
-    updateRun(runId, { status: 'done', finished_at: new Date().toISOString() })
+    updateRun(runId, {
+      status: blocked ? 'failed' : 'done',
+      error: blocked ? '核心需求在两轮修复后仍未实现' : null,
+      finished_at: new Date().toISOString(),
+    })
     emit(runId, 'done', {
       runId,
-      status: 'done',
-      score: totalScore,
+      status: blocked ? 'failed' : 'done',
+      score: finalScore,
       versionSeq: version.seq,
       candidateId: winner.candidate.id,
       model: generated.model,
       skipped,
+      blocked,
+      qaFailed,
     })
   } catch (err) {
     const message = (err as Error).message || '未知错误'
@@ -647,6 +794,13 @@ export async function executeRun(runId: string): Promise<void> {
   } finally {
     stoppedRuns.delete(runId)
     runControllers.delete(runId)
+    uiRuns.delete(runId)
+    const qa = pendingQa.get(runId)
+    if (qa) {
+      clearTimeout(qa.timer)
+      pendingQa.delete(runId)
+      qa.resolve(null)
+    }
     for (const candidateId of cleanupCandidateIds) {
       cancelReportWait(candidateId)
       receivedReports.delete(candidateId)
