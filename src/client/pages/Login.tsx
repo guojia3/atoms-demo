@@ -16,7 +16,7 @@ const VALUE_POINTS = [
 
 export default function Login({ onDone }: Props) {
   const navigate = useNavigate()
-  const [tab, setTab] = useState<'login' | 'register'>('register')
+  const [tab, setTab] = useState<'login' | 'register'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
