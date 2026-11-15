@@ -64,6 +64,10 @@ export const config = {
     .filter(Boolean),
   /** 候选数量：1 = 单路生成，2 = 双路赛马（默认），最多 3 */
   raceCount: Math.max(1, Math.min(3, Number(process.env.RACE_COUNT || 2))),
+  /** 首候选就绪后等待其余候选的默认上限；超时后中止慢候选并用当前最优候选定稿 */
+  raceGraceMs: Math.max(500, Number(process.env.RACE_GRACE_MS || 45000)),
+  /** 首候选得分低于 70 时自动放宽的等待上限 */
+  raceLowScoreGraceMs: Math.max(500, Number(process.env.RACE_LOW_SCORE_GRACE_MS || 90000)),
   gitCommit: process.env.GIT_COMMIT || '',
   isProd: process.env.NODE_ENV === 'production',
   rootDir: process.cwd(),

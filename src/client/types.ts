@@ -112,6 +112,8 @@ export interface Report {
   notes?: string[]
   reviewSource?: string
   race?: RaceCandidate[]
+  fallback?: boolean
+  skipped?: Array<{ id: string; model: string; reason: string; graceMs: number }>
 }
 
 export interface PickTarget {

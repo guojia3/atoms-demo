@@ -122,6 +122,15 @@ export async function consumeRun(
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 30_000)
   const events: RunEvent[] = []
+  const probed = new Set<string>()
+  const autoProbe = async (candidates: Array<{ id?: string }>) => {
+    if (opts.autoProbe === false) return
+    for (const c of candidates) {
+      if (!c?.id || probed.has(c.id)) continue
+      probed.add(c.id)
+      await http(jar, 'POST', `/api/candidates/${c.id}/report`, { metrics: FULL_METRICS })
+    }
+  }
   try {
     const res = await fetch(`${BASE}/api/runs/${runId}/events?from=${opts.from ?? 0}`, {
       headers: { cookie: jar.header() },
@@ -149,10 +158,12 @@ export async function consumeRun(
           continue
         }
         events.push(event)
-        if (event.type === 'candidates' && opts.autoProbe !== false) {
-          for (const c of event.data?.candidates || []) {
-            await http(jar, 'POST', `/api/candidates/${c.id}/report`, { metrics: FULL_METRICS })
-          }
+        // 策略 A 起，候选就绪即发 candidate；旧用例可能只依赖 candidates 汇总事件，两者都处理并去重
+        if (event.type === 'candidate' && event.data?.status === 'done') {
+          await autoProbe([event.data])
+        }
+        if (event.type === 'candidates') {
+          await autoProbe(event.data?.candidates || [])
         }
         if (opts.stopAt && event.type === opts.stopAt) {
           await reader.cancel().catch(() => {})

@@ -1,7 +1,7 @@
 // 工程师 Alex：单文件 HTML 生成；编辑优先全量重写（Patch 作为 P1 在 runner 内实现）
 import { isMockMode } from '../config.js'
 import { streamChat } from '../llm/client.js'
-import { escapeHtml, mockHtml, pickTemplate, TEMPLATE_LABELS, type TemplateKind } from '../mock/templates.js'
+import { escapeHtml, matchTemplate, mockHtml, pickTemplate, TEMPLATE_LABELS, type TemplateKind } from '../mock/templates.js'
 import { extractHtml, staticCheck } from '../verify/static-check.js'
 import type { Plan } from './planner.js'
 
@@ -165,6 +165,7 @@ export function mockGenerated(
   baseHtml: string | null,
   plan: Plan,
   variant = 0,
+  kindOverride?: TemplateKind,
 ): GeneratedCandidate {
   const started = Date.now()
   if (mode === 'edit' && baseHtml) {
@@ -179,7 +180,7 @@ export function mockGenerated(
       durationMs: Date.now() - started,
     }
   }
-  const kind = pickTemplate(prompt)
+  const kind = kindOverride || pickTemplate(prompt)
   return {
     html: withVariant(mockHtml(kind, prompt), kind, variant),
     model: 'atoms-mock',
@@ -196,16 +197,21 @@ export async function generateCandidate(input: {
   baseHtml: string | null
   variant?: number
   preferredModel?: string
+  signal?: AbortSignal
   onProgress: (chars: number, tail: string) => void
 }): Promise<GeneratedCandidate> {
   const started = Date.now()
   const variant = input.variant ?? 0
+  const aborted = () => Boolean(input.signal?.aborted)
+
+  if (aborted()) throw new DOMException('Aborted', 'AbortError')
 
   if (isMockMode()) {
     // 模拟短暂生成过程，让时间线可见，但整体依然很快
     const candidate = mockGenerated(input.prompt, input.mode, input.baseHtml, input.plan, variant)
     for (let i = 1; i <= 3; i++) {
       await new Promise((r) => setTimeout(r, 110 + variant * 40))
+      if (aborted()) throw new DOMException('Aborted', 'AbortError')
       const chars = Math.round((candidate.html.length * i) / 3)
       input.onProgress(chars, candidate.html.slice(Math.max(0, chars - 80), chars))
     }
@@ -214,6 +220,7 @@ export async function generateCandidate(input: {
 
   let lastError: Error | null = null
   for (let attempt = 0; attempt < 2; attempt++) {
+    if (aborted()) throw new DOMException('Aborted', 'AbortError')
     const usePatch = attempt === 0 && input.mode === 'edit' && !!input.baseHtml
     try {
       const feedback =
@@ -234,7 +241,9 @@ export async function generateCandidate(input: {
           input.onProgress(meta.chars, delta)
         },
         input.preferredModel,
+        input.signal,
       )
+      if (aborted()) throw new DOMException('Aborted', 'AbortError')
 
       let html: string | null = null
       let note = ''
@@ -274,15 +283,26 @@ export async function generateCandidate(input: {
     }
   }
 
-  // 真实模型失败：创作任务用模板兜底（保证一定能看到预览）；编辑任务不覆盖旧版本
+  // 真实模型失败：只有需求明确命中内置模板时才允许兜底；否则直接失败，
+  // 避免用“任务看板”之类的默认模板冒充二维码等无关需求，造成清单与产物错配。
+  if (aborted()) throw new DOMException('Aborted', 'AbortError')
   if (input.mode === 'edit') {
     throw new Error(`本次修改未生成可用页面：${lastError?.message || '模型不可用'}`)
   }
-  const fallback = mockGenerated(input.prompt, 'create', null, input.plan)
+  const matched = matchTemplate(input.prompt)
+  if (!matched) {
+    throw new Error(
+      `模型未能生成可用页面（${lastError?.message || '未知错误'}），且该需求没有匹配的内置模板；` +
+        '已停止保存，避免用无关模板冒充成品。请重试或换一种更具体的描述。',
+    )
+  }
+  const fallback = mockGenerated(input.prompt, 'create', null, input.plan, 0, matched)
   return {
     ...fallback,
     source: 'fallback',
-    notes: [`模型不可用（${lastError?.message?.slice(0, 100) || '未知错误'}），已降级为内置模板`],
+    notes: [
+      `演示兜底：模型不可用（${lastError?.message?.slice(0, 100) || '未知错误'}），已降级为内置「${TEMPLATE_LABELS[matched]}」模板；内容与需求可能不完全一致，建议重试`,
+    ],
     error: lastError?.message,
   }
 }

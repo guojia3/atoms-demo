@@ -18,7 +18,8 @@ export const TEMPLATE_LABELS: Record<TemplateKind, string> = {
   expense: '记账本',
 }
 
-export function pickTemplate(prompt: string): TemplateKind {
+/** 只返回明确命中的模板；未命中返回 null（真实模型兜底时禁止默认看板冒充） */
+export function matchTemplate(prompt: string): TemplateKind | null {
   const p = prompt.toLowerCase()
   // 先匹配特征强的品类，避免「待办/清单」把看板误判成打卡
   if (/2048|数字合并|合并方块|益智游戏/.test(p)) return 'game2048'
@@ -26,7 +27,12 @@ export function pickTemplate(prompt: string): TemplateKind {
   if (/记账|账本|支出|收入|预算|花销/.test(p)) return 'expense'
   if (/笔记|markdown|写作|灵感|草稿/.test(p)) return 'notes'
   if (/打卡|习惯|habit|坚持/.test(p)) return 'habit'
-  return 'kanban'
+  if (/看板|kanban|待办|todo/i.test(p)) return 'kanban'
+  return null
+}
+
+export function pickTemplate(prompt: string): TemplateKind {
+  return matchTemplate(prompt) || 'kanban'
 }
 
 export function mockHtml(kind: TemplateKind, prompt: string): string {

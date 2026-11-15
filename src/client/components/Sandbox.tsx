@@ -25,6 +25,10 @@ interface Props {
   onPick?: (picked: { selector: string; tag: string; text: string; html?: string }) => void
   /** 内容自适应高度：运行时上报 scrollHeight 后撑开 iframe（仅分享页使用，工作台预览保持 h-full） */
   autoHeight?: boolean
+  /** 是否把沙箱内的存储写入同步到服务端；隐藏的并行探针沙箱关闭，避免污染项目数据 */
+  syncKv?: boolean
+  /** 关闭同步时，把写入批次交给宿主缓存（用于候选预览定稿后合并） */
+  onKvOps?: (ops: Array<{ op: string; key: string; value?: string }>) => void
 }
 
 const CSP = [
@@ -55,7 +59,7 @@ function buildSrcDoc(html: string, initData: Record<string, string>, runtime: st
 }
 
 const Sandbox = forwardRef<SandboxHandle, Props>(function Sandbox(
-  { html, initData, scope, onConsole, onPick, autoHeight = false },
+  { html, initData, scope, onConsole, onPick, autoHeight = false, syncKv = true, onKvOps },
   ref,
 ) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -78,6 +82,10 @@ const Sandbox = forwardRef<SandboxHandle, Props>(function Sandbox(
   const [reloadDoc, setReloadDoc] = useState<string | null>(null)
   const autoHeightRef = useRef(autoHeight)
   autoHeightRef.current = autoHeight
+  const syncKvRef = useRef(syncKv)
+  syncKvRef.current = syncKv
+  const kvOpsRef = useRef(onKvOps)
+  kvOpsRef.current = onKvOps
   // 自适应高度：初始给一个可测量的高度，运行时上报后按内容撑开
   const [frameHeight, setFrameHeight] = useState(480)
 
@@ -106,6 +114,10 @@ const Sandbox = forwardRef<SandboxHandle, Props>(function Sandbox(
         return
       }
       if (data.type === 'atoms-kv' && Array.isArray(data.ops)) {
+        if (!syncKvRef.current) {
+          kvOpsRef.current?.(data.ops)
+          return
+        }
         const currentScope = scopeRef.current
         const path =
           currentScope.kind === 'project' ? `/api/projects/${currentScope.projectId}/kv` : `/api/share/${currentScope.slug}/kv`

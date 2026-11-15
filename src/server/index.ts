@@ -3,6 +3,7 @@ import express from 'express'
 import type { NextFunction, Request, Response } from 'express'
 import fs from 'node:fs'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { config, isMockMode } from './config.js'
 import { attachUser } from './auth.js'
 import { markInterruptedRuns } from './store.js'
@@ -118,12 +119,104 @@ app.use('/api', (_req, res) => {
   res.status(404).json({ error: '接口不存在' })
 })
 
+// 静态资源压缩：启动时对 JS/CSS/HTML 预生成 brotli + gzip，按 Accept-Encoding 返回；
+// 只拦截静态路径，不触碰 /api（SSE 仍逐事件直出，不会被缓冲或压缩）。
+interface CompressedAsset {
+  type: string
+  etag: string
+  lastModified: string
+  br: Buffer
+  gzip: Buffer
+}
+
+const compressedAssets = new Map<string, CompressedAsset>()
+
+function assetContentType(ext: string): string | null {
+  if (ext === '.js') return 'application/javascript; charset=UTF-8'
+  if (ext === '.css') return 'text/css; charset=UTF-8'
+  if (ext === '.html') return 'text/html; charset=UTF-8'
+  return null
+}
+
+function buildCompressedAssets(distDir: string): void {
+  const started = Date.now()
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full)
+        continue
+      }
+      const type = assetContentType(path.extname(entry.name))
+      if (!type) continue
+      const buf = fs.readFileSync(full)
+      // 小文件压缩收益低于头部开销，但 HTML 入口始终压缩
+      if (buf.length < 1024 && path.extname(entry.name) !== '.html') continue
+      const stat = fs.statSync(full)
+      const urlPath = '/' + path.relative(distDir, full).split(path.sep).join('/')
+      compressedAssets.set(urlPath, {
+        type,
+        etag: `W/"${buf.length.toString(16)}-${Math.round(stat.mtimeMs).toString(16)}"`,
+        lastModified: stat.mtime.toUTCString(),
+        br: zlib.brotliCompressSync(buf, {
+          params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 10 },
+        }),
+        gzip: zlib.gzipSync(buf, { level: 9 }),
+      })
+    }
+  }
+  walk(distDir)
+  console.log(`[atoms] 静态资源预压缩：${compressedAssets.size} 个文件，耗时 ${Date.now() - started}ms`)
+}
+
+function pickEncoding(req: Request): 'br' | 'gzip' | null {
+  const accept = String(req.headers['accept-encoding'] || '')
+  if (/\bbr\b/.test(accept)) return 'br'
+  if (/\bgzip\b/.test(accept)) return 'gzip'
+  return null
+}
+
+/** 命中预压缩资源则直接返回；返回 false 时交给 express.static / SPA 回退 */
+function serveCompressed(req: Request, res: Response, asset: CompressedAsset): boolean {
+  const encoding = pickEncoding(req)
+  if (!encoding || req.headers.range) return false
+  const body = encoding === 'br' ? asset.br : asset.gzip
+  res.setHeader('Content-Type', asset.type)
+  res.setHeader('Content-Encoding', encoding)
+  res.setHeader('Vary', 'Accept-Encoding')
+  res.setHeader('Cache-Control', 'public, max-age=3600')
+  res.setHeader('ETag', asset.etag)
+  res.setHeader('Last-Modified', asset.lastModified)
+  res.setHeader('Content-Length', String(body.length))
+  res.status(200)
+  res.end(req.method === 'HEAD' ? undefined : body)
+  return true
+}
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next()
+  if (req.path.startsWith('/api')) return next()
+  let key: string
+  try {
+    key = decodeURIComponent(req.path)
+  } catch {
+    return next()
+  }
+  if (key.endsWith('/')) key += 'index.html'
+  const asset = compressedAssets.get(key)
+  if (asset && serveCompressed(req, res, asset)) return
+  next()
+})
+
 if (config.isProd) {
   const indexFile = path.join(config.distDir, 'index.html')
   if (fs.existsSync(indexFile)) {
+    buildCompressedAssets(config.distDir)
     app.use(express.static(config.distDir, { maxAge: '1h', index: false }))
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api')) return next()
+      const indexAsset = compressedAssets.get('/index.html')
+      if (indexAsset && serveCompressed(req, res, indexAsset)) return
       res.sendFile(indexFile)
     })
   } else {

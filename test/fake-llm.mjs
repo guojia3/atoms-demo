@@ -134,6 +134,39 @@ const QA_HTML_V2 = QA_HTML.replace(
   '<h1 id="qa-title">QA Demo 已修改</h1>',
 )
 
+const QR_HTML = QA_HTML
+  .replace('<title>QA Demo</title>', '<title>二维码工具</title>')
+  .replace('<h1 id="qa-title">QA Demo</h1>', '<h1 id="qa-title">二维码工具</h1>')
+
+// 低分候选：静态检查可过、但没有可交互控件/持久化，且运行时报 3 个错误，
+// 用于验证“首候选 <70 分时放宽等待上限”的策略。
+const LOW_SCORE_HTML = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>低分候选</title>
+<style>body{font-family:-apple-system,sans-serif;background:#fff;color:#222;padding:24px;line-height:1.7}h1{font-size:24px}p{font-size:14px;color:#555}</style>
+</head>
+<body>
+<h1>低分候选</h1>
+<p>这是一个用于 QA 策略验证的低分页面：没有交互控件，也不写入 localStorage。</p>
+<p>${'低分候选占位内容。'.repeat(220)}</p>
+<script>
+setTimeout(function(){ throw new Error('low-a'); }, 0);
+setTimeout(function(){ throw new Error('low-b'); }, 10);
+setTimeout(function(){ throw new Error('low-c'); }, 20);
+</script>
+</body>
+</html>`
+
+const stats = {
+  engineerStarted: 0,
+  engineerCompleted: 0,
+  engineerAborted: 0,
+  abortedModels: [],
+}
+
 const attempts = new Map()
 
 function hashText(text) {
@@ -202,6 +235,18 @@ function planFor(body) {
 }
 
 const server = http.createServer(async (req, res) => {
+  if (req.method === 'GET' && req.url === '/stats') {
+    json(res, 200, stats)
+    return
+  }
+  if (req.method === 'POST' && req.url === '/stats/reset') {
+    stats.engineerStarted = 0
+    stats.engineerCompleted = 0
+    stats.engineerAborted = 0
+    stats.abortedModels = []
+    json(res, 200, { ok: true })
+    return
+  }
   if (req.method === 'GET' && req.url === '/v1/models') {
     json(res, 200, { object: 'list', data: [{ id: 'fake-a' }, { id: 'fake-b' }] })
     return
@@ -232,6 +277,44 @@ const server = http.createServer(async (req, res) => {
   const count = (attempts.get(key) || 0) + 1
   attempts.set(key, count)
   console.log(`[fake-llm] role=${role} model=${model} attempt=${count} len=${text.length}`)
+
+  if (role === 'engineer') {
+    stats.engineerStarted += 1
+    res.on('finish', () => {
+      stats.engineerCompleted += 1
+    })
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        stats.engineerAborted += 1
+        stats.abortedModels.push(model)
+      }
+    })
+  }
+
+  // 赛马策略 QA：慢候选（fake-b）在 RACESLOWB 下延迟返回，用于 45s/90s 上限与取消验证
+  if (role === 'engineer' && text.includes('RACESLOWB') && model.includes('fake-b')) {
+    const delayMs = Number(process.env.RACE_SLOW_MS || 2000)
+    await streamText(res, QA_HTML, { delayMs, gap: 20 })
+    return
+  }
+  // 兜底一致性 QA：fake-a 输出非法 HTML → 触发模板兜底；fake-b 输出合法模型页面
+  if (role === 'engineer' && text.includes('MODEL_LOW') && model.includes('fake-b')) {
+    await streamText(res, LOW_SCORE_HTML, { gap: 10 })
+    return
+  }
+  if (role === 'engineer' && text.includes('QRFALLBACKA')) {
+    if (model.includes('fake-a')) {
+      await streamText(res, '这不是合法的 HTML，静态检查会失败（QA 兜底注入）。', { gap: 5 })
+      return
+    }
+    await streamText(res, text.includes('二维码') ? QR_HTML : QA_HTML, { gap: 10 })
+    return
+  }
+  // 赛马策略 QA：fake-a 返回低分页面（<70），用于验证“首候选低分自动放宽上限”
+  if (role === 'engineer' && text.includes('RACELOW')) {
+    await streamText(res, model.includes('fake-a') ? LOW_SCORE_HTML : QA_HTML, { gap: 10 })
+    return
+  }
 
   // 402：工程师请求直接失败（规划仍成功），用于验证创作兜底
   if (role === 'engineer' && text.includes('HTTP402')) {

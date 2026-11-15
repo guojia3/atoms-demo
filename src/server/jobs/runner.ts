@@ -25,7 +25,9 @@ interface PendingReport {
 }
 
 const pendingReports = new Map<string, PendingReport>()
+const receivedReports = new Map<string, ProbeMetrics>()
 const stoppedRuns = new Set<string>()
+const runControllers = new Map<string, Set<AbortController>>()
 
 const STEP_LABELS: Record<string, string> = {
   plan: 'Mike 拆解需求',
@@ -45,6 +47,13 @@ function isStopped(runId: string): boolean {
 
 export function stopRun(runId: string): void {
   stoppedRuns.add(runId)
+  for (const controller of runControllers.get(runId) || []) {
+    try {
+      controller.abort()
+    } catch {
+      /* noop */
+    }
+  }
   const run = getRun(runId)
   if (run && run.status === 'running') {
     updateRun(runId, { status: 'stopped', finished_at: new Date().toISOString() })
@@ -52,17 +61,25 @@ export function stopRun(runId: string): void {
   }
 }
 
-/** 客户端探针结果回填；返回是否仍处于等待状态 */
+/** 客户端探针结果回填；候选尚未进入等待时先缓存，避免 early preview 的上报丢失 */
 export function resolveReport(candidateId: string, metrics: ProbeMetrics): boolean {
   const pending = pendingReports.get(candidateId)
-  if (!pending) return false
-  clearTimeout(pending.timer)
-  pendingReports.delete(candidateId)
-  pending.resolve(metrics)
-  return true
+  if (pending) {
+    clearTimeout(pending.timer)
+    pendingReports.delete(candidateId)
+    pending.resolve(metrics)
+    return true
+  }
+  if (!receivedReports.has(candidateId)) receivedReports.set(candidateId, metrics)
+  return false
 }
 
 function waitForReport(candidateId: string, timeoutMs: number): Promise<ProbeMetrics | null> {
+  const cached = receivedReports.get(candidateId)
+  if (cached) {
+    receivedReports.delete(candidateId)
+    return Promise.resolve(cached)
+  }
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       pendingReports.delete(candidateId)
@@ -70,6 +87,18 @@ function waitForReport(candidateId: string, timeoutMs: number): Promise<ProbeMet
     }, timeoutMs)
     pendingReports.set(candidateId, { resolve, timer })
   })
+}
+
+function cancelReportWait(candidateId: string): void {
+  const pending = pendingReports.get(candidateId)
+  if (!pending) return
+  clearTimeout(pending.timer)
+  pendingReports.delete(candidateId)
+  pending.resolve(null)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)))
 }
 
 function candidateModelName(index: number, total: number): string {
@@ -133,6 +162,7 @@ export async function executeRun(runId: string): Promise<void> {
     updateRun(runId, { status: 'failed', error: '项目不存在', finished_at: new Date().toISOString() })
     return
   }
+  const cleanupCandidateIds: string[] = []
 
   try {
     const baseHtml = run.base_version_id ? getVersion(run.base_version_id)?.html || null : null
@@ -167,7 +197,7 @@ export async function executeRun(runId: string): Promise<void> {
 
     if (isStopped(runId)) return
 
-    // 2) 生成：单路或双路赛马（并行）
+    // 2) 生成：单路或双路赛马（并行）；首候选就绪即进入预览/实测，其余候选有等待上限
     emitStep(runId, 'generate', 'running')
     const raceCount = config.raceCount
     const startedAt = Date.now()
@@ -177,9 +207,90 @@ export async function executeRun(runId: string): Promise<void> {
       candidate: createCandidate({ runId, model: candidateModelName(index, raceCount) }),
     }))
 
-    const results = await Promise.all(
-      slots.map(async (slot) => {
-        const { index, candidate: slotCandidate } = slot
+    type CandidateResult = {
+      candidate: ReturnType<typeof createCandidate>
+      index: number
+      generated: GeneratedCandidate
+      staticResult: ReturnType<typeof staticCheck>
+    }
+    type ScoredCandidate = CandidateResult & {
+      metrics: ProbeMetrics | null
+      probe: ReturnType<typeof scoreProbe>
+      review: Awaited<ReturnType<typeof reviewChecklist>>
+      totalScore: number
+      report: {
+        score: number
+        parts: { static: number; probe: number; checklist: number }
+        static: ReturnType<typeof staticCheck>
+        probe: ReturnType<typeof scoreProbe>['items']
+        checklist: Awaited<ReturnType<typeof reviewChecklist>>['items']
+        metrics: ProbeMetrics | null
+        reviewSource: string
+        notes: string[]
+      }
+    }
+    interface CandidateEntry {
+      index: number
+      candidate: ReturnType<typeof createCandidate>
+      controller: AbortController
+      status: 'generating' | 'ready' | 'failed' | 'cancelled'
+      readyAt?: number
+      result?: CandidateResult
+      checklist?: ChecklistItem[]
+      failureMessage?: string
+      metricsPromise?: Promise<ProbeMetrics | null>
+      scoredPromise?: Promise<ScoredCandidate>
+    }
+
+    const entries: CandidateEntry[] = slots.map((slot) => ({
+      ...slot,
+      controller: new AbortController(),
+      status: 'generating',
+    }))
+    const runAbortSet = new Set(entries.map((entry) => entry.controller))
+    runControllers.set(runId, runAbortSet)
+    cleanupCandidateIds.push(...entries.map((entry) => entry.candidate.id))
+
+    const scoreEntry = async (entry: CandidateEntry): Promise<ScoredCandidate> => {
+      const item = entry.result!
+      const candidateChecklist = entry.checklist || checklist
+      const metrics = await (entry.metricsPromise || Promise.resolve(null))
+      const probe = scoreProbe(metrics)
+      const review = await reviewChecklist({ checklist: candidateChecklist, metrics, html: item.generated.html, prompt: targetPrompt })
+      const totalScore = item.staticResult.score + probe.score + review.score
+      return {
+        ...item,
+        metrics,
+        probe,
+        review,
+        totalScore,
+        report: {
+          score: totalScore,
+          parts: { static: item.staticResult.score, probe: probe.score, checklist: review.score },
+          static: item.staticResult,
+          probe: probe.items,
+          checklist: review.items,
+          metrics,
+          reviewSource: review.source,
+          notes: item.generated.notes,
+        },
+      }
+    }
+
+    let firstEntry: CandidateEntry | null = null
+    let resolveFirst: (entry: CandidateEntry) => void = () => {}
+    const firstReady = new Promise<CandidateEntry>((resolve) => {
+      resolveFirst = resolve
+    })
+    let resolveAllDone: () => void = () => {}
+    const allDone = new Promise<void>((resolve) => {
+      resolveAllDone = resolve
+    })
+    let settled = 0
+
+    const tasks = entries.map((entry) => {
+      const { index, candidate: slotCandidate } = entry
+      const task = (async (): Promise<CandidateResult | null> => {
         try {
           const generated = await generateCandidate({
             plan: activePlan,
@@ -188,6 +299,7 @@ export async function executeRun(runId: string): Promise<void> {
             baseHtml,
             variant: index,
             preferredModel: isMockMode() ? undefined : slotCandidate.model,
+            signal: entry.controller.signal,
             onProgress: (chars, delta) => {
               const now = Date.now()
               if (now - (progressAt.get(slotCandidate.id) || 0) < 450) return
@@ -203,8 +315,9 @@ export async function executeRun(runId: string): Promise<void> {
             },
           })
 
-          if (isStopped(runId)) {
-            updateCandidate(slotCandidate.id, { status: 'failed', error: '用户已停止' })
+          if (isStopped(runId) || entry.status === 'cancelled' || entry.controller.signal.aborted) {
+            entry.status = 'cancelled'
+            updateCandidate(slotCandidate.id, { status: 'failed', error: '已取消' })
             return null
           }
 
@@ -216,6 +329,24 @@ export async function executeRun(runId: string): Promise<void> {
             error: generated.error || null,
             report_json: JSON.stringify({ static: staticResult, notes: generated.notes }),
           })
+          entry.result = { candidate: slotCandidate, index, generated, staticResult }
+          entry.status = 'ready'
+          entry.readyAt = Date.now()
+          if (generated.source === 'fallback') {
+            entry.checklist = mockPlan(targetPrompt).checklist
+            addMessage({
+              projectId: project.id,
+              role: 'system',
+              kind: 'text',
+              content: '演示兜底：模型未能生成可用页面，已使用内置模板；验收清单已切换为该模板的通用标准，产物与原始需求可能不完全一致，建议重试。',
+            })
+          } else {
+            entry.checklist = checklist
+          }
+          // 先注册等待再发事件，客户端 early preview 的探针回报不会丢
+          entry.metricsPromise = waitForReport(slotCandidate.id, config.probeTimeoutMs)
+          entry.scoredPromise = scoreEntry(entry)
+
           emit(runId, 'progress', {
             candidateId: slotCandidate.id,
             variant: index,
@@ -234,35 +365,119 @@ export async function executeRun(runId: string): Promise<void> {
             durationMs: generated.durationMs,
             notes: generated.notes,
             staticScore: staticResult.score,
+            previewable: staticResult.ok && generated.html.length > 0,
+            first: !firstEntry,
           })
-          return { candidate: slotCandidate, index, generated, staticResult }
+          if (!firstEntry) {
+            firstEntry = entry
+            resolveFirst(entry)
+          }
+          return entry.result
         } catch (err) {
+          if (entry.controller.signal.aborted || entry.status === 'cancelled') {
+            entry.status = 'cancelled'
+            updateCandidate(slotCandidate.id, { status: 'failed', error: '超过赛马等待上限，已取消' })
+            return null
+          }
           const message = (err as Error).message || '生成失败'
+          entry.status = 'failed'
+          entry.failureMessage = message
           updateCandidate(slotCandidate.id, { status: 'failed', error: message })
           emit(runId, 'candidate', { id: slotCandidate.id, status: 'failed', variant: index, error: message })
           return null
+        } finally {
+          settled += 1
+          if (settled === entries.length) resolveAllDone()
         }
-      }),
-    )
+      })()
+      return task
+    })
 
-    const ready = results.filter((item): item is NonNullable<(typeof results)[number]> => item !== null)
-    if (ready.length === 0) throw new Error('所有候选均生成失败，请重试或继续修改')
+    const first = await Promise.race([firstReady, allDone.then(() => null)])
+    if (!first) {
+      const failure = entries.map((entry) => entry.failureMessage).find(Boolean)
+      throw new Error(failure || '所有候选均生成失败，请重试或继续修改')
+    }
+
+    emitStep(
+      runId,
+      'generate',
+      'running',
+      `候选${String.fromCharCode(65 + first.index)} 已就绪，先预览并实测；其余候选等待中…`,
+    )
+    emitStep(runId, 'verify', 'running', '首候选实测中，等待其余候选…')
+
+    const firstScored = await first.scoredPromise!
+    const lowScore = firstScored.totalScore < 70
+    const graceMs = lowScore ? config.raceLowScoreGraceMs : config.raceGraceMs
+    const deadlineAt = (first.readyAt || Date.now()) + graceMs
+    emit(runId, 'race', {
+      firstCandidateId: first.candidate.id,
+      firstScore: firstScored.totalScore,
+      graceMs,
+      extended: lowScore,
+      deadlineAt,
+    })
+
+    const hasGenerating = entries.some((entry) => entry.status === 'generating')
+    if (hasGenerating) {
+      const outcome = await Promise.race([
+        allDone.then(() => 'done' as const),
+        sleep(deadlineAt - Date.now()).then(() => 'timeout' as const),
+      ])
+      if (outcome === 'timeout') {
+        for (const entry of entries) {
+          if (entry.status !== 'generating') continue
+          entry.status = 'cancelled'
+          cancelReportWait(entry.candidate.id)
+          try {
+            entry.controller.abort()
+          } catch {
+            /* noop */
+          }
+        }
+        // 取消 fetch 后通常立即 settle；最多再等 3s，避免异常 provider 拖住整个 run
+        await Promise.race([allDone, sleep(3000)])
+      }
+    }
+    await Promise.race([allDone, sleep(3000)])
+
+    const readyResults = entries.map((entry) => entry.result).filter((item): item is CandidateResult => Boolean(item))
+    if (readyResults.length === 0) throw new Error('所有候选均生成失败，请重试或继续修改')
+    const skipped = entries
+      .filter((entry) => entry.status === 'cancelled')
+      .map((entry) => ({
+        id: entry.candidate.id,
+        model: entry.result?.generated.model || entry.candidate.model,
+        reason: 'grace-timeout',
+        graceMs,
+      }))
+    for (const item of skipped) {
+      emit(runId, 'candidate_timeout', item)
+    }
+
+    const scored = (await Promise.all(
+      entries
+        .filter((entry) => entry.result && entry.scoredPromise)
+        .map((entry) => entry.scoredPromise!),
+    )).filter((item): item is ScoredCandidate => Boolean(item))
+    if (scored.length === 0) throw new Error('所有候选均未完成验收，请重试或继续修改')
 
     emitStep(
       runId,
       'generate',
       'done',
       `${
-        ready.length > 1 ? `双路赛马：${ready.length} 路候选就绪，` : ''
-      }${ready
+        raceCount > 1 ? `赛马：${scored.length} 路候选完成，` : ''
+      }${scored
         .map(
           (item) =>
             `${item.generated.source === 'model' ? '模型' : '模板'} ${Math.round((item.generated.html.length / 1024) * 10) / 10}KB`,
         )
-        .join(' · ')}`,
+        .join(' · ')}${skipped.length ? `；${skipped.length} 路超过 ${Math.round(graceMs / 1000)}s 上限已取消` : ''}`,
     )
     emit(runId, 'candidates', {
-      candidates: ready.map((item) => ({
+      candidates: scored.map((item) => ({
         id: item.candidate.id,
         variant: item.index,
         model: item.generated.model,
@@ -270,49 +485,23 @@ export async function executeRun(runId: string): Promise<void> {
         staticScore: item.staticResult.score,
         durationMs: item.generated.durationMs,
       })),
+      skipped,
     })
-
-    // 3) 实测 + 验收（客户端按候选顺序逐个探针回报）
-    emitStep(runId, 'verify', 'running', `等待 ${ready.length} 个候选的浏览器沙箱探针回报…`)
-    const budget = config.probeTimeoutMs * ready.length + 5000
-    const metricsList = await Promise.all(ready.map((item) => waitForReport(item.candidate.id, budget)))
-    const probeCount = metricsList.filter(Boolean).length
     emitStep(
       runId,
       'verify',
       'done',
-      probeCount ? `收到 ${probeCount}/${ready.length} 份实测数据` : '未收到实测数据，按 0 分继续',
+      scored.some((item) => item.metrics)
+        ? `收到 ${scored.filter((item) => item.metrics).length}/${scored.length} 份实测数据`
+        : '未收到实测数据，按 0 分继续',
     )
     emitStep(runId, 'review', 'running')
 
-    const scored = await Promise.all(
-      ready.map(async (item, i) => {
-        const metrics = metricsList[i]
-        const probe = scoreProbe(metrics)
-        const review = await reviewChecklist({ checklist, metrics, html: item.generated.html, prompt: targetPrompt })
-        const totalScore = item.staticResult.score + probe.score + review.score
-        return {
-          ...item,
-          metrics,
-          probe,
-          review,
-          totalScore,
-          report: {
-            score: totalScore,
-            parts: { static: item.staticResult.score, probe: probe.score, checklist: review.score },
-            static: item.staticResult,
-            probe: probe.items,
-            checklist: review.items,
-            metrics,
-            reviewSource: review.source,
-            notes: item.generated.notes,
-          },
-        }
-      }),
-    )
-
+    const sourceRank = (item: ScoredCandidate): number =>
+      item.generated.source === 'model' ? 2 : item.generated.source === 'fallback' ? 0 : 1
     const winner = [...scored].sort(
       (a, b) =>
+        sourceRank(b) - sourceRank(a) ||
         b.totalScore - a.totalScore ||
         b.staticResult.score - a.staticResult.score ||
         a.generated.durationMs - b.generated.durationMs,
@@ -330,7 +519,13 @@ export async function executeRun(runId: string): Promise<void> {
     scored.forEach((item) => {
       updateCandidate(item.candidate.id, { score: item.totalScore, report_json: JSON.stringify(item.report) })
     })
-    const report = { ...winner.report, race }
+    const skipNotes = skipped.map((item) => {
+      const label = `候选${String.fromCharCode(65 + entries.findIndex((entry) => entry.candidate.id === item.id))}`
+      return `${label}（${item.model}）超过 ${Math.round(graceMs / 1000)}s 等待上限，已取消`
+    })
+    const reportNotes = [...winner.generated.notes, ...skipNotes]
+    const fallbackWinner = winner.generated.source === 'fallback'
+    const report = { ...winner.report, notes: reportNotes, race, skipped, fallback: fallbackWinner }
     updateCandidate(winner.candidate.id, { score: winner.totalScore, report_json: JSON.stringify(report) })
     emit(runId, 'report', report)
     const winnerLabel = race.find((r) => r.adopted)?.label || '候选A'
@@ -345,13 +540,15 @@ export async function executeRun(runId: string): Promise<void> {
       raceCount > 1
         ? `双路赛马：${race.map((r) => `${r.label} ${r.score} 分${r.adopted ? '（采用）' : ''}`).join('，')}。`
         : ''
+    const skipLine = skipNotes.length ? `慢候选处理：${skipNotes.join('；')}。` : ''
     addMessage({
       projectId: project.id,
       role: 'agent',
       kind: 'report',
       content: [
         raceLine,
-        reportSummary(winner.totalScore, report.parts, passCount, winner.review.items.length, winner.generated.notes),
+        skipLine,
+        reportSummary(winner.totalScore, report.parts, passCount, winner.review.items.length, reportNotes),
       ]
         .filter(Boolean)
         .join('\n'),
@@ -381,14 +578,36 @@ export async function executeRun(runId: string): Promise<void> {
       projectId: project.id,
       role: 'agent',
       kind: 'version',
-      content: `已生成版本 v${version.seq}`,
-      meta: { versionId: version.id, seq: version.seq, score: totalScore, model: generated.model, adopted: true },
+      content: `已生成版本 v${version.seq}${fallbackWinner ? '（演示兜底模板）' : ''}`,
+      meta: {
+        versionId: version.id,
+        seq: version.seq,
+        score: totalScore,
+        model: generated.model,
+        candidateId: winner.candidate.id,
+        source,
+        adopted: true,
+      },
     })
-    emit(runId, 'version', { versionId: version.id, seq: version.seq, score: totalScore, adopted: true })
+    emit(runId, 'version', {
+      versionId: version.id,
+      seq: version.seq,
+      score: totalScore,
+      candidateId: winner.candidate.id,
+      model: generated.model,
+      source,
+      adopted: true,
+      skipped,
+    })
 
     const passed = totalScore >= 70
+    const fallbackNote = fallbackWinner
+      ? '演示兜底：模型未能生成可用页面，已使用内置模板；内容与原始需求可能不完全一致，建议重试。'
+      : ''
     const conclusion = [
+      fallbackNote,
       `已采用 v${version.seq}（${totalScore} 分，${generated.model}）${raceCount > 1 ? `，从 ${race.length} 个候选中择优` : ''}。`,
+      skipNotes.length ? `${skipNotes.join('；')}。` : '',
       passed ? '验收通过，可直接预览、发布或继续迭代。' : '总分低于 70，已保留该版本，建议按报告中的未通过项继续修改。',
       metrics ? '' : '（本次未收到浏览器实测，分数仅由静态检查与清单估算）',
     ]
@@ -413,11 +632,24 @@ export async function executeRun(runId: string): Promise<void> {
     // 停止竞态：收尾阶段被停止时保持 stopped，不写 done
     if (isStopped(runId)) return
     updateRun(runId, { status: 'done', finished_at: new Date().toISOString() })
-    emit(runId, 'done', { runId, status: 'done', score: totalScore, versionSeq: version.seq })
+    emit(runId, 'done', {
+      runId,
+      status: 'done',
+      score: totalScore,
+      versionSeq: version.seq,
+      candidateId: winner.candidate.id,
+      model: generated.model,
+      skipped,
+    })
   } catch (err) {
     const message = (err as Error).message || '未知错误'
     await finishWithFailure(runId, project.id, message)
   } finally {
     stoppedRuns.delete(runId)
+    runControllers.delete(runId)
+    for (const candidateId of cleanupCandidateIds) {
+      cancelReportWait(candidateId)
+      receivedReports.delete(candidateId)
+    }
   }
 }

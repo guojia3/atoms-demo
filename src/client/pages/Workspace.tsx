@@ -105,6 +105,9 @@ function ReportCard({ report, onFix }: { report: Report; onFix?: () => void }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[14px] font-semibold text-ink">验收报告</span>
+            {report.fallback && (
+              <span className="rounded-full bg-warn-soft px-2 py-0.5 text-[10px] font-medium text-warn">演示兜底</span>
+            )}
             <span
               className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
                 passed ? 'bg-ok-soft text-ok' : 'bg-warn-soft text-warn'
@@ -141,7 +144,8 @@ function ReportCard({ report, onFix }: { report: Report; onFix?: () => void }) {
               }`}
               title={`${shortModel(c.model)} · ${c.parts.static}/10 + ${c.parts.probe}/50 + ${c.parts.checklist}/40`}
             >
-              {c.label} · {c.score} 分{c.adopted ? '（采用）' : ''}
+              {c.label} · {c.score} 分{c.source === 'fallback' ? ' · 兜底' : ''}
+              {c.adopted ? '（采用）' : ''}
             </span>
           ))}
         </div>
@@ -337,6 +341,11 @@ export default function Workspace({ user }: Props) {
 
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [previewHtml, setPreviewHtml] = useState('')
+  // 第二候选在隐藏沙箱内同步装载，与可见候选共用同一个 1.6s 稳定期，探针仍串行执行
+  const [probeHtml, setProbeHtml] = useState('')
+  // 首候选提前预览：定稿前交互先缓存，定稿后仅在胜者就是该候选时合并到正式 KV
+  const [previewCandidate, setPreviewCandidate] = useState<{ id: string; model?: string } | null>(null)
+  const [previewNotice, setPreviewNotice] = useState('')
   const [kvData, setKvData] = useState<Record<string, string>>({})
   const [pickedTarget, setPickedTarget] = useState<PickTarget | null>(null)
   const [runStatus, setRunStatus] = useState<'idle' | 'running' | 'done' | 'failed' | 'stopped'>('idle')
@@ -361,6 +370,12 @@ export default function Workspace({ user }: Props) {
   const [chatRailOpen, setChatRailOpen] = useState(false)
 
   const sandboxRef = useRef<SandboxHandle>(null)
+  const probeSandboxRef = useRef<SandboxHandle>(null)
+  const previewCandidateRef = useRef<{ id: string; model?: string } | null>(null)
+  previewCandidateRef.current = previewCandidate
+  const previewKvOpsRef = useRef<Array<Array<{ op: string; key: string; value?: string }>>>([])
+  const finalCandidateRef = useRef<{ id: string; model?: string } | null>(null)
+  const probeQueueRef = useRef<Promise<void>>(Promise.resolve())
   const streamAbortRef = useRef<AbortController | null>(null)
   const connectedRef = useRef<string | null>(null)
   const probedCandidates = useRef<Set<string>>(new Set())
@@ -414,32 +429,110 @@ export default function Workspace({ user }: Props) {
     }
   }
 
-  const handleCandidatesReady = async (list: CandidateReady[]) => {
-    // 赛马：按候选顺序逐个切换预览并实测，避免多个探针同时争抢同一个 iframe
-    for (const item of list) {
-      if (!item?.id || probedCandidates.current.has(item.id)) continue
-      probedCandidates.current.add(item.id)
-      try {
-        const res = await api<{ html: string }>(`/api/candidates/${item.id}/html`)
-        setPreviewHtml(res.html)
-        await loadKv(projectIdRef.current)
-        addConsole('info', `${item.model || '候选'} 页面就绪（${Math.round((res.html.length / 1024) * 10) / 10}KB），开始浏览器实测…`)
-        await new Promise((r) => setTimeout(r, PROBE_DELAY_MS))
-        if (!mountedRef.current) return
-        const metrics = await sandboxRef.current?.probe()
-        if (!metrics) {
-          addConsole('warn', `${item.model || '候选'} 实测未返回结果，按静态与清单估算`)
-          continue
-        }
-        await api(`/api/candidates/${item.id}/report`, { method: 'POST', body: { metrics } })
+  const hiddenQueueRef = useRef<Array<{ item: CandidateReady; html: string }>>([])
+  const hiddenBusyRef = useRef(false)
+
+  const reportProbe = async (item: CandidateReady, metrics: ProbeMetrics | null) => {
+    if (!metrics) {
+      addConsole('warn', `${item.model || '候选'} 实测未返回结果，按静态与清单估算`)
+      return
+    }
+    await api(`/api/candidates/${item.id}/report`, { method: 'POST', body: { metrics } })
+    addConsole(
+      'info',
+      `${item.model || '候选'} 实测完成：${metrics.elements} 个元素 / 模拟点击 ${metrics.simulatedClicks ?? 0} 次 / 变化 ${
+        metrics.simulatedChanges ?? 0
+      } 次 / 报错 ${metrics.errorCount} 条 → 已上报`,
+    )
+  }
+
+  /** 探针串行队列：两个 iframe 同时批量点击会相互争抢主线程与计时，保持证据口径一致 */
+  const enqueueProbe = (fn: () => Promise<void>) => {
+    const next = probeQueueRef.current.then(fn, fn)
+    probeQueueRef.current = next.catch(() => {})
+    return next
+  }
+
+  const runHiddenQueue = async () => {
+    if (hiddenBusyRef.current) return
+    hiddenBusyRef.current = true
+    try {
+      while (hiddenQueueRef.current.length > 0) {
+        const next = hiddenQueueRef.current.shift()!
+        setProbeHtml(next.html)
         addConsole(
           'info',
-          `${item.model || '候选'} 实测完成：${metrics.elements} 个元素 / 模拟点击 ${metrics.simulatedClicks ?? 0} 次 / 变化 ${
-            metrics.simulatedChanges ?? 0
-          } 次 / 报错 ${metrics.errorCount} 条 → 已上报`,
+          `${next.item.model || '候选'} 页面并行装载（${Math.round((next.html.length / 1024) * 10) / 10}KB），等待实测`,
         )
+        await new Promise((r) => setTimeout(r, PROBE_DELAY_MS))
+        if (!mountedRef.current) return
+        await enqueueProbe(async () => {
+          if (!mountedRef.current) return
+          const metrics = (await probeSandboxRef.current?.probe()) ?? null
+          if (metrics) await reportProbe(next.item, metrics)
+          else addConsole('warn', `${next.item.model || '候选'} 实测未返回结果，按静态与清单估算`)
+        })
+        setProbeHtml('')
+        await new Promise((r) => setTimeout(r, 80))
+      }
+    } finally {
+      hiddenBusyRef.current = false
+      setProbeHtml('')
+    }
+  }
+
+  /** 首候选通过静态检查后立即预览；后续候选装入隐藏沙箱，探针按队列串行 */
+  const handleCandidate = async (item: CandidateReady & { status?: string; previewable?: boolean; error?: string }) => {
+    if (!item?.id || probedCandidates.current.has(item.id)) return
+    if (item.status === 'failed') {
+      addConsole('warn', `${item.model || '候选'} 生成失败：${item.error || '未知错误'}`)
+      return
+    }
+    if (item.previewable === false) {
+      addConsole('warn', `${item.model || '候选'} 静态检查未通过，暂不预览`)
+      return
+    }
+    probedCandidates.current.add(item.id)
+    try {
+      const res = await api<{ html: string }>(`/api/candidates/${item.id}/html`)
+      const html = res.html || ''
+      if (!html) return
+      if (!previewCandidateRef.current) {
+        previewCandidateRef.current = { id: item.id, model: item.model }
+        setPreviewCandidate({ id: item.id, model: item.model })
+        setPreviewNotice('候选预览（可能被最终胜者替换；交互暂不保存）')
+        setPreviewHtml(html)
+        showToast('候选预览已就绪，定稿前交互暂不保存')
+        addConsole('info', `${item.model || '候选'} 已就绪，立即预览并实测（可能被最终胜者替换）`)
+        await new Promise((r) => setTimeout(r, PROBE_DELAY_MS))
+        if (!mountedRef.current) return
+        await enqueueProbe(async () => {
+          if (!mountedRef.current) return
+          await reportProbe(item, (await sandboxRef.current?.probe()) ?? null)
+        })
+        return
+      }
+      if (previewCandidateRef.current.id !== item.id) {
+        hiddenQueueRef.current.push({ item, html })
+        void runHiddenQueue()
+      }
+    } catch (err) {
+      addConsole('error', `候选页面加载失败：${(err as Error).message}`)
+    }
+  }
+
+  /** 定稿时只有胜者就是早期预览候选，才把预览期间的交互合并到正式 KV；否则丢弃，避免串数据 */
+  const flushPreviewKv = async (winnerId?: string) => {
+    const preview = previewCandidateRef.current
+    const batches = previewKvOpsRef.current
+    previewKvOpsRef.current = []
+    if (!preview || !winnerId || preview.id !== winnerId) return
+    for (const ops of batches) {
+      if (!ops.length) continue
+      try {
+        await api(`/api/projects/${projectIdRef.current}/kv`, { method: 'POST', body: { ops } })
       } catch (err) {
-        addConsole('error', `实测或上报失败：${(err as Error).message}`)
+        addConsole('warn', `候选预览数据合并失败：${(err as Error).message}`)
       }
     }
   }
@@ -455,6 +548,13 @@ export default function Workspace({ user }: Props) {
     setLiveReport(null)
     setLivePlan(null)
     setLiveConclusion('')
+    finalCandidateRef.current = null
+    previewCandidateRef.current = null
+    setPreviewCandidate(null)
+    setPreviewNotice('')
+    previewKvOpsRef.current = []
+    hiddenQueueRef.current = []
+    setProbeHtml('')
     let lastSeq = 0
     let attempts = 0
 
@@ -507,15 +607,35 @@ export default function Workspace({ user }: Props) {
               setProgress({ chars: event.data?.chars || 0, tail: event.data?.tail || '' })
               break
             case 'candidate':
+              void handleCandidate(event.data as CandidateReady & { status?: string; previewable?: boolean; error?: string })
               break
             case 'candidates':
-              void handleCandidatesReady((event.data?.candidates || []) as CandidateReady[])
               break
+            case 'race': {
+              const score = event.data?.firstScore
+              const grace = Math.round(Number(event.data?.graceMs || 0) / 1000)
+              addConsole(
+                'info',
+                `首候选 ${score ?? '—'} 分，等待其余候选上限 ${grace}s${event.data?.extended ? '（低于 70 分已自动放宽）' : ''}`,
+              )
+              break
+            }
+            case 'candidate_timeout': {
+              const seconds = Math.round(Number(event.data?.graceMs || 0) / 1000)
+              addConsole('warn', `${event.data?.model || '候选'} 超过 ${seconds}s 等待上限，已取消，使用当前最优候选定稿`)
+              showToast(`慢候选已取消，正在保存当前最优版本`)
+              break
+            }
             case 'report':
               setLiveReport(event.data as Report)
               break
             case 'version':
-              showToast(`已保存版本 v${event.data?.seq}${event.data?.score != null ? ` · ${event.data.score} 分` : ''}`)
+              finalCandidateRef.current = { id: event.data?.candidateId || '', model: event.data?.model }
+              showToast(
+                `已保存版本 v${event.data?.seq}${event.data?.score != null ? ` · ${event.data.score} 分` : ''}${
+                  event.data?.source === 'fallback' ? '（演示兜底模板）' : ''
+                }`,
+              )
               break
             case 'conclusion':
               setLiveConclusion(event.data?.content || '')
@@ -528,7 +648,26 @@ export default function Workspace({ user }: Props) {
               const status = String(event.data?.status || 'done') as any
               setRunStatus(status === 'running' ? 'done' : status)
               setProgress(null)
+              const final = finalCandidateRef.current
+              const preview = previewCandidateRef.current
+              await flushPreviewKv(final?.id)
               await refreshAfterRun()
+              if (preview) {
+                if (final && final.id !== preview.id) {
+                  showToast(`最终采用 ${final.model || '其他候选'}，候选预览已替换`)
+                  addConsole('info', `最终采用 ${final.model || '其他候选'}，预览已从候选${preview.model ? `（${preview.model}）` : ''}切换`)
+                } else if (final) {
+                  showToast('已定稿：候选预览已切换为正式数据')
+                  sandboxRef.current?.reload()
+                }
+              }
+              previewCandidateRef.current = null
+              setPreviewCandidate(null)
+              setPreviewNotice('')
+              previewKvOpsRef.current = []
+              hiddenQueueRef.current = []
+              setProbeHtml('')
+              finalCandidateRef.current = null
               break
             }
             default:
@@ -567,6 +706,13 @@ export default function Workspace({ user }: Props) {
     probedCandidates.current.clear()
     setProject(null)
     setPreviewHtml('')
+    setProbeHtml('')
+    setPreviewCandidate(null)
+    setPreviewNotice('')
+    previewCandidateRef.current = null
+    previewKvOpsRef.current = []
+    hiddenQueueRef.current = []
+    finalCandidateRef.current = null
     setKvData({})
     setRunStatus('idle')
     setSteps({})
@@ -984,6 +1130,9 @@ export default function Workspace({ user }: Props) {
               </div>
             </div>
             <div className="flex items-center gap-1.5">
+              {previewNotice && (
+                <span className="hidden max-w-[280px] truncate text-[10px] text-warn xl:inline">{previewNotice}</span>
+              )}
               {pickMode && <span className="text-[10px] text-brand">点选模式：点击页面元素</span>}
               <button
                 onClick={() => {
@@ -1014,7 +1163,7 @@ export default function Workspace({ user }: Props) {
 
           <div className="scrollbar-thin relative min-h-0 flex-1 overflow-auto bg-canvas p-3 sm:p-5">
             <div
-              className={`mx-auto flex h-full flex-col overflow-hidden rounded-xl border border-line bg-white transition-all ${
+              className={`relative mx-auto flex h-full flex-col overflow-hidden rounded-xl border border-line bg-white transition-all ${
                 device === 'mobile' ? 'max-w-[390px]' : 'max-w-full'
               } ${tab === 'preview' ? '' : 'hidden'}`}
             >
@@ -1024,6 +1173,10 @@ export default function Workspace({ user }: Props) {
                   html={previewHtml}
                   initData={kvData}
                   scope={{ kind: 'project', projectId: project.id }}
+                  syncKv={!previewCandidate}
+                  onKvOps={(ops) => {
+                    if (previewKvOpsRef.current.length < 50) previewKvOpsRef.current.push(ops)
+                  }}
                   onConsole={(level, text) => {
                     if (level === 'error') addConsole('error', text)
                     else if (level === 'warn') addConsole('warn', text)
@@ -1047,6 +1200,19 @@ export default function Workspace({ user }: Props) {
                     <p className="mt-4 text-[13px] font-medium text-ink-soft">正在生成第一个版本…</p>
                     <p className="mt-1 text-[11px] text-ink-muted">左侧可以看到规划、生成与验收的完整过程</p>
                   </div>
+                </div>
+              )}
+              {/* 第二候选的隐藏沙箱：与可见预览同尺寸、不接收交互、不同步 KV，只用于并行等待后串行探针 */}
+              {probeHtml && (
+                <div className="pointer-events-none invisible absolute inset-0" aria-hidden="true">
+                  <Sandbox
+                    ref={probeSandboxRef}
+                    html={probeHtml}
+                    initData={kvData}
+                    scope={{ kind: 'project', projectId: project.id }}
+                    syncKv={false}
+                    onConsole={() => {}}
+                  />
                 </div>
               )}
             </div>

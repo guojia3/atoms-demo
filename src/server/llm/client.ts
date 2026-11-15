@@ -132,6 +132,7 @@ export async function streamChat(
   messages: ChatMessage[],
   onDelta: (delta: string, meta: { model: string; chars: number }) => void,
   preferredModel?: string,
+  outerSignal?: AbortSignal,
 ): Promise<StreamResult> {
   if (isMockMode() || config.providers.length === 0) {
     throw new Error('MOCK_MODE 下不应调用模型')
@@ -142,8 +143,11 @@ export async function streamChat(
 
   for (const provider of pickProviders(preferredModel)) {
     for (let attempt = 0; attempt < 2; attempt++) {
+      if (outerSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
       const controller = new AbortController()
       const totalTimer = setTimeout(() => controller.abort(), TOTAL_TIMEOUT_MS)
+      const abortFromOuter = () => controller.abort()
+      outerSignal?.addEventListener('abort', abortFromOuter)
       let firstChunk = true
       try {
         const result = await requestOnce(
@@ -165,6 +169,7 @@ export async function streamChat(
           truncated: result.truncated,
         }
       } catch (err) {
+        if (outerSignal?.aborted) throw new DOMException('Aborted', 'AbortError')
         lastError = err as Error
         const status = (err as Error & { status?: number }).status
         // 已经产生内容说明是中途失败，直接抛错交给上层降级，避免重复生成
@@ -177,6 +182,7 @@ export async function streamChat(
         break // 换下一个供应商
       } finally {
         clearTimeout(totalTimer)
+        outerSignal?.removeEventListener('abort', abortFromOuter)
       }
     }
   }
